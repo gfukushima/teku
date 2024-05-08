@@ -30,15 +30,15 @@ public interface Eth2P2PNetwork extends P2PNetwork<Eth2Peer> {
 
   void onSyncStateChanged(final boolean isInSync, final boolean isOptimistic);
 
-  void subscribeToAttestationSubnetId(int subnetId);
+  void subscribeToAttestationSubnetId(final int subnetId);
 
-  void unsubscribeFromAttestationSubnetId(int subnetId);
+  void unsubscribeFromAttestationSubnetId(final int subnetId);
 
   void setLongTermAttestationSubnetSubscriptions(Iterable<Integer> subnetIndices);
 
-  void subscribeToSyncCommitteeSubnetId(int subnetId);
+  void subscribeToSyncCommitteeSubnetId(final int subnetId);
 
-  void unsubscribeFromSyncCommitteeSubnetId(int subnetId);
+  void unsubscribeFromSyncCommitteeSubnetId(final int subnetId);
 
   MetadataMessage getMetadata();
 
