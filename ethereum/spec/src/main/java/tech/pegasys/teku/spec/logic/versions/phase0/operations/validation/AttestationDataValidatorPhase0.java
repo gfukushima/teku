@@ -47,19 +47,25 @@ public class AttestationDataValidatorPhase0 implements AttestationDataValidator 
     return firstOf(
         () ->
             check(
-                // The committee index is now obtained from the Attestation object, not the AttestationData.
-                // This check will need to be performed elsewhere where the committee index is available.
-                true,
-                AttestationInvalidReason.COMMITTEE_INDEX_TOO_HIGH),
+                // The committee index is now obtained from the Attestation object, not the
+                // AttestationData.
+                // This check will need to be performed elsewhere where the committee index is
+                // available.
+                true, AttestationInvalidReason.COMMITTEE_INDEX_TOO_HIGH),
         () ->
             check(
-                miscHelpers.computeEpochAtSlot(data.getSlot()).equals(beaconStateAccessors.getPreviousEpoch(state))
-                    || miscHelpers.computeEpochAtSlot(data.getSlot())
+                miscHelpers
+                        .computeEpochAtSlot(data.getSlot())
+                        .equals(beaconStateAccessors.getPreviousEpoch(state))
+                    || miscHelpers
+                        .computeEpochAtSlot(data.getSlot())
                         .equals(beaconStateAccessors.getCurrentEpoch(state)),
                 AttestationInvalidReason.NOT_FROM_CURRENT_OR_PREVIOUS_EPOCH),
         () ->
             check(
-                miscHelpers.computeEpochAtSlot(data.getSlot()).equals(miscHelpers.computeEpochAtSlot(data.getSlot())),
+                miscHelpers
+                    .computeEpochAtSlot(data.getSlot())
+                    .equals(miscHelpers.computeEpochAtSlot(data.getSlot())),
                 AttestationInvalidReason.SLOT_NOT_IN_EPOCH),
         () ->
             check(
@@ -70,7 +76,9 @@ public class AttestationDataValidatorPhase0 implements AttestationDataValidator 
                 AttestationInvalidReason.SUBMITTED_TOO_QUICKLY),
         () -> isSubmittedTooLate(state, data),
         () -> {
-          if (miscHelpers.computeEpochAtSlot(data.getSlot()).equals(beaconStateAccessors.getCurrentEpoch(state))) {
+          if (miscHelpers
+              .computeEpochAtSlot(data.getSlot())
+              .equals(beaconStateAccessors.getCurrentEpoch(state))) {
             return check(
                 data.getSource().equals(state.getCurrentJustifiedCheckpoint()),
                 AttestationInvalidReason.INCORRECT_CURRENT_JUSTIFIED_CHECKPOINT);
