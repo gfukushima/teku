@@ -130,7 +130,8 @@ public class AttestationValidator {
               final BeaconState state = maybeState.get();
 
               // The committee index is within the expected range
-              if (data.getIndex()
+              if (attestation
+                  .getFirstCommitteeIndex()
                   .isGreaterThanOrEqualTo(
                       spec.getCommitteeCountPerSlot(state, data.getTarget().getEpoch()))) {
                 return completedFuture(
@@ -146,12 +147,13 @@ public class AttestationValidator {
                 return completedFuture(
                     InternalValidationResultWithState.reject(
                         "Attestation received on incorrect subnet (%s) for specified committee index (%s)",
-                        attestation.getData().getIndex(), receivedOnSubnetId.getAsInt()));
+                        attestation.getFirstCommitteeIndex(), receivedOnSubnetId.getAsInt()));
               }
 
               // [REJECT] The number of aggregation bits matches the committee size
               final IntList committee =
-                  spec.getBeaconCommittee(state, data.getSlot(), data.getIndex());
+                  spec.getBeaconCommittee(
+                      state, data.getSlot(), attestation.getFirstCommitteeIndex());
               if (committee.size() != attestation.getAggregationBits().size()) {
                 return completedFuture(
                     InternalValidationResultWithState.reject(
@@ -190,7 +192,7 @@ public class AttestationValidator {
 
                         // Save committee shuffling seed since the state is available and
                         // attestation is valid
-                        validatableAttestation.saveCommitteeShufflingSeed(state);
+                        validatableAttestation.saveCommitteeShufflingSeedAndCommitteesSize(state);
                         return InternalValidationResultWithState.accept(state);
                       });
             });
