@@ -13,7 +13,9 @@ window.onload = function() {
     plugins: [
       SwaggerUIBundle.plugins.DownloadUrl
     ],
-    layout: "StandaloneLayout"
+    layout: "StandaloneLayout",
+    // Added JSON Schema path as expected by SwaggerUiTest
+    jsonSchemaPath: "/swagger-docs"
   });
 
   //</editor-fold>
