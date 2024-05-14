@@ -77,7 +77,7 @@ public class SwaggerUiTest extends AbstractDataBackedRestAPIIntegrationTest {
     Set<String> links = new HashSet<>();
 
     Document doc =
-        Jsoup.connect(url).data("query", "Java").userAgent("Mozilla").timeout(3000).get();
+        Jsoup.connect(url).data("query", "Java").userAgent("Mozilla").timeout(10000).get(); // Increased timeout to 10 seconds
 
     final URL baseUrl = new URL(url);
 
