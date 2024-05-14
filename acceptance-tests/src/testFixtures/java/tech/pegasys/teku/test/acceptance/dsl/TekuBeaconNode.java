@@ -479,7 +479,11 @@ public class TekuBeaconNode extends TekuNode {
                   .getBody()
                   .executionPayload
                   .asInternalExecutionPayload(spec, bellatrixBlock.getMessage().slot);
-          LOG.debug("Execution payload status at slot " + bellatrixBlock.getMessage().slot + ": " + (executionPayload.isDefault() ? "DEFAULT" : "NON-DEFAULT"));
+          LOG.debug(
+              "Execution payload status at slot "
+                  + bellatrixBlock.getMessage().slot
+                  + ": "
+                  + (executionPayload.isDefault() ? "DEFAULT" : "NON-DEFAULT"));
           assertThat(executionPayload.isDefault()).describedAs("Is default payload").isFalse();
           LOG.debug(
               "Non default execution payload found at slot " + bellatrixBlock.getMessage().slot);
