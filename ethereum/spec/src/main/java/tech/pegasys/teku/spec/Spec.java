@@ -20,6 +20,7 @@ import static tech.pegasys.teku.spec.SpecMilestone.DENEB;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.base.Preconditions;
+import it.unimi.dsi.fastutil.ints.Int2IntMap;
 import it.unimi.dsi.fastutil.ints.IntList;
 import java.io.File;
 import java.io.IOException;
@@ -755,10 +756,11 @@ public class Spec {
   }
 
   public Optional<List<Withdrawal>> getExpectedWithdrawals(final BeaconState state) {
-    return atState(state)
-        .getBlockProcessor()
-        .getExpectedWithdrawals(state)
-        .getExpectedWithdrawals();
+    if (!atState(state).getMilestone().isGreaterThanOrEqualTo(SpecMilestone.CAPELLA)) {
+      return Optional.empty();
+    }
+    return Optional.of(
+        atState(state).getBlockProcessor().getExpectedWithdrawals(state).getWithdrawalList());
   }
 
   // Block Processor Utils
@@ -848,6 +850,10 @@ public class Spec {
   public IntList getBeaconCommittee(
       final BeaconState state, final UInt64 slot, final UInt64 index) {
     return atState(state).beaconStateAccessors().getBeaconCommittee(state, slot, index);
+  }
+
+  public Int2IntMap getBeaconCommitteesSize(final BeaconState state, final UInt64 slot) {
+    return atState(state).beaconStateAccessors().getBeaconCommitteesSize(state, slot);
   }
 
   public Optional<BLSPublicKey> getValidatorPubKey(
