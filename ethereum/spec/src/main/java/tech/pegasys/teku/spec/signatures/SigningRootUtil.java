@@ -70,7 +70,7 @@ public class SigningRootUtil {
             spec.computeEpochAtSlot(attestationData.getSlot()),
             forkInfo.getFork(),
             forkInfo.getGenesisValidatorsRoot());
-    return specVersion.miscHelpers().computeSigningRoot(attestationData, domain);
+    return specVersion.miscHelpers().computeSigningRoot(attestationData.hashTreeRoot(), domain);
   }
 
   public Bytes signingRootForSignAggregationSlot(final UInt64 slot, final ForkInfo forkInfo) {
