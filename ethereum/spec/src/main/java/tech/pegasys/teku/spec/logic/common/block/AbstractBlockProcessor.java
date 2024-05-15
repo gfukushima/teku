@@ -819,35 +819,23 @@ public abstract class AbstractBlockProcessor implements BlockProcessor {
       final BLSPublicKey pubkey,
       final Bytes32 withdrawalCredentials,
       final UInt64 amount) {
-    final Validator validator = getValidatorFromDeposit(pubkey, withdrawalCredentials, amount);
-    LOG.debug("Adding new validator with index {} to state", state.getValidators().size());
-    state.getValidators().append(validator);
-    state.getBalances().appendElement(amount);
-  }
-
-  protected Validator getValidatorFromDeposit(
-      final BLSPublicKey pubkey, final Bytes32 withdrawalCredentials, final UInt64 amount) {
-    final Validator validator = getValidatorFromDeposit(pubkey, withdrawalCredentials, amount);
-    LOG.debug("Adding new validator with index {} to state", state.getValidators().size());
-    state.getValidators().append(validator);
-    state.getBalances().appendElement(amount);
-  }
-
-  protected Validator getValidatorFromDeposit(
-      final BLSPublicKey pubkey, final Bytes32 withdrawalCredentials, final UInt64 amount) {
     final UInt64 effectiveBalance =
         amount
             .minus(amount.mod(specConfig.getEffectiveBalanceIncrement()))
             .min(specConfig.getMaxEffectiveBalance());
-    return new Validator(
-        pubkey,
-        withdrawalCredentials,
-        effectiveBalance,
-        false,
-        FAR_FUTURE_EPOCH,
-        FAR_FUTURE_EPOCH,
-        FAR_FUTURE_EPOCH,
-        FAR_FUTURE_EPOCH);
+    final Validator validator =
+        new Validator(
+            pubkey,
+            withdrawalCredentials,
+            effectiveBalance,
+            false,
+            FAR_FUTURE_EPOCH,
+            FAR_FUTURE_EPOCH,
+            FAR_FUTURE_EPOCH,
+            FAR_FUTURE_EPOCH);
+    LOG.debug("Adding new validator with index {} to state", state.getValidators().size());
+    state.getValidators().append(validator);
+    state.getBalances().appendElement(amount);
   }
 
   @Override
