@@ -1,5 +1,5 @@
 /*
- * Copyright Consensys Software Inc., 2022
+ * Copyright Consensys Software Inc., 2024
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
  * the License. You may obtain a copy of the License at
@@ -17,9 +17,7 @@ import java.util.HashMap;
 import java.util.Map;
 import org.apache.tuweni.bytes.Bytes32;
 import tech.pegasys.teku.infrastructure.unsigned.UInt64;
-import tech.pegasys.teku.spec.datastructures.state.PendingAttestation;
-import tech.pegasys.teku.spec.datastructures.util.AttestationProcessingResult;
-import tech.pegasys.teku.spec.datastructures.util.AttestationUtil;
+import tech.pegasys.teku.spec.datastructures.operations.Attestation;
 
 interface ValidatorStatsPhase0 extends BeaconStatePhase0 {
   @Override
@@ -33,12 +31,12 @@ interface ValidatorStatsPhase0 extends BeaconStatePhase0 {
   }
 
   private CorrectAndLiveValidators getValidatorStats(
-      final Iterable<PendingAttestation> attestations, final Bytes32 correctTargetRoot) {
+      final Iterable<Attestation> attestations, final Bytes32 correctTargetRoot) {
 
-    final Map<UInt64, Map<UInt64, AttestationProcessingResult>>
-        liveValidatorsAggregationBitsBySlotAndCommittee = new HashMap<>();
-    final Map<UInt64, Map<UInt64, AttestationProcessingResult>>
-        correctValidatorsAggregationBitsBySlotAndCommittee = new HashMap<>();
+    final Map<UInt64, Map<UInt64, SszBitlist>> liveValidatorsAggregationBitsBySlotAndCommittee =
+        new HashMap<>();
+    final Map<UInt64, Map<UInt64, SszBitlist>> correctValidatorsAggregationBitsBySlotAndCommittee =
+        new HashMap<>();
 
     attestations.forEach(
         attestation -> {
@@ -46,36 +44,50 @@ interface ValidatorStatsPhase0 extends BeaconStatePhase0 {
             correctValidatorsAggregationBitsBySlotAndCommittee
                 .computeIfAbsent(attestation.getData().getSlot(), __ -> new HashMap<>())
                 .merge(
-                    attestation.getData().getIndex(),
+                    attestation.getFirstCommitteeIndex(), // Updated to use the new index field from
+                    // Attestation
                     attestation.getAggregationBits(),
-                    AttestationUtil::nullableOr);
+                    (existing, update) -> {
+                      if (existing == null) {
+                        return update;
+                      } else {
+                        return existing.or(update); // Updated to merge aggregation bits
+                      }
+                    });
           }
 
           liveValidatorsAggregationBitsBySlotAndCommittee
               .computeIfAbsent(attestation.getData().getSlot(), __ -> new HashMap<>())
               .merge(
-                  attestation.getData().getIndex(),
+                  attestation.getFirstCommitteeIndex(), // Updated to use the new index field from
+                  // Attestation
                   attestation.getAggregationBits(),
-                  AttestationUtil::nullableOr);
+                  (existing, update) -> {
+                    if (existing == null) {
+                      return update;
+                    } else {
+                      return existing.or(update); // Updated to merge aggregation bits
+                    }
+                  });
         });
 
     final int numberOfCorrectValidators =
         correctValidatorsAggregationBitsBySlotAndCommittee.values().stream()
             .flatMap(aggregationBitsByCommittee -> aggregationBitsByCommittee.values().stream())
-            .mapToInt(AttestationProcessingResult::getBitCount)
+            .mapToInt(SszBitlist::count) // Updated to count bits in aggregation bits
             .sum();
 
     final int numberOfLiveValidators =
         liveValidatorsAggregationBitsBySlotAndCommittee.values().stream()
             .flatMap(aggregationBitsByCommittee -> aggregationBitsByCommittee.values().stream())
-            .mapToInt(AttestationProcessingResult::getBitCount)
+            .mapToInt(SszBitlist::count) // Updated to count bits in aggregation bits
             .sum();
 
     return new CorrectAndLiveValidators(numberOfCorrectValidators, numberOfLiveValidators);
   }
 
   private boolean isCorrectAttestation(
-      final PendingAttestation attestation, final Bytes32 correctTargetRoot) {
+      final Attestation attestation, final Bytes32 correctTargetRoot) {
     // Assuming that the correctTargetRoot is the root of the block at the attestation's slot
     return attestation.getData().getBeaconBlockRoot().equals(correctTargetRoot);
   }
