@@ -297,9 +297,7 @@ public abstract class AbstractBlockProcessor implements BlockProcessor {
   }
 
   protected void assertAttestationValid(
-      final MutableBeaconState state, final Attestation attestation) {
-    final AttestationData data = attestation.getData();
-
+      final MutableBeaconState state, final Attestation attestation, final AttestationData data) {
     final Optional<OperationInvalidReason> invalidReason = validateAttestation(state, data);
     checkArgument(
         invalidReason.isEmpty(),
@@ -307,7 +305,8 @@ public abstract class AbstractBlockProcessor implements BlockProcessor {
         invalidReason.map(OperationInvalidReason::describe).orElse(""));
 
     IntList committee =
-        beaconStateAccessors.getBeaconCommittee(state, data.getSlot(), data.getIndex());
+        beaconStateAccessors.getBeaconCommittee(
+            state, data.getSlot(), attestation.getFirstCommitteeIndex());
     checkArgument(
         attestation.getAggregationBits().size() == committee.size(),
         "process_attestations: Attestation aggregation bits and committee don't have the same length - committee "
@@ -594,7 +593,7 @@ public abstract class AbstractBlockProcessor implements BlockProcessor {
         () -> {
           for (Attestation attestation : attestations) {
             // Validate
-            assertAttestationValid(state, attestation);
+            assertAttestationValid(state, attestation, attestation.getData());
             processAttestation(state, attestation, indexedAttestationProvider);
           }
         });
@@ -820,6 +819,14 @@ public abstract class AbstractBlockProcessor implements BlockProcessor {
       final BLSPublicKey pubkey,
       final Bytes32 withdrawalCredentials,
       final UInt64 amount) {
+    final Validator validator = getValidatorFromDeposit(pubkey, withdrawalCredentials, amount);
+    LOG.debug("Adding new validator with index {} to state", state.getValidators().size());
+    state.getValidators().append(validator);
+    state.getBalances().appendElement(amount);
+  }
+
+  protected Validator getValidatorFromDeposit(
+      final BLSPublicKey pubkey, final Bytes32 withdrawalCredentials, final UInt64 amount) {
     final Validator validator = getValidatorFromDeposit(pubkey, withdrawalCredentials, amount);
     LOG.debug("Adding new validator with index {} to state", state.getValidators().size());
     state.getValidators().append(validator);
