@@ -48,36 +48,34 @@ public class AttestationDataValidatorElectra implements AttestationDataValidator
     return firstOf(
         () ->
             check(
-                data.getTarget().getEpoch().equals(beaconStateAccessors.getPreviousEpoch(state))
-                    || data.getTarget()
-                        .getEpoch()
+                miscHelpers
+                        .computeEpochAtSlot(data.getSlot())
+                        .equals(beaconStateAccessors.getPreviousEpoch(state))
+                    || miscHelpers
+                        .computeEpochAtSlot(data.getSlot())
                         .equals(beaconStateAccessors.getCurrentEpoch(state)),
-                AttestationInvalidReason.NOT_FROM_CURRENT_OR_PREVIOUS_EPOCH),
+                () -> "Attestation is not from the current or previous epoch"),
         () ->
             check(
-                data.getTarget().getEpoch().equals(miscHelpers.computeEpochAtSlot(data.getSlot())),
-                AttestationInvalidReason.SLOT_NOT_IN_EPOCH),
+                miscHelpers
+                    .computeEpochAtSlot(data.getSlot())
+                    .equals(miscHelpers.computeEpochAtSlot(data.getSlot())),
+                () -> "Attestation slot is not within the attestation's epoch"),
         () ->
             check(
                 data.getSlot()
                         .plus(specConfig.getMinAttestationInclusionDelay())
                         .compareTo(state.getSlot())
                     <= 0,
-                AttestationInvalidReason.SUBMITTED_TOO_QUICKLY),
-        () ->
-            check(
-                data.getIndex().equals(UInt64.ZERO),
-                AttestationInvalidReason.COMMITTEE_INDEX_MUST_BE_ZERO),
+                () -> "Attestation submitted too quickly"),
         () -> {
-          if (data.getTarget().getEpoch().equals(beaconStateAccessors.getCurrentEpoch(state))) {
-            return check(
-                data.getSource().equals(state.getCurrentJustifiedCheckpoint()),
-                AttestationInvalidReason.INCORRECT_CURRENT_JUSTIFIED_CHECKPOINT);
-          } else {
-            return check(
-                data.getSource().equals(state.getPreviousJustifiedCheckpoint()),
-                AttestationInvalidReason.INCORRECT_PREVIOUS_JUSTIFIED_CHECKPOINT);
-          }
+          UInt64 currentEpoch = beaconStateAccessors.getCurrentEpoch(state);
+          return check(
+              data.getSource().getEpoch().equals(currentEpoch)
+                  || data.getSource()
+                      .getEpoch()
+                      .equals(beaconStateAccessors.getPreviousEpoch(state)),
+              () -> "Attestation has incorrect justified checkpoint");
         });
   }
 }
