@@ -172,6 +172,11 @@ public class BlockProcessorAltair extends AbstractBlockProcessor {
       final byte previousParticipationFlags = epochParticipation.get(index).get();
       byte newParticipationFlags = 0;
       final UInt64 baseReward = beaconStateAccessorsAltair.getBaseReward(state, index);
+      // Calculate the inclusion delay based on the state's slot and the attestation data slot
+      final UInt64 inclusionDelay = state.getSlot().minus(data.getSlot());
+      List<Integer> participationFlagIndices =
+          beaconStateAccessorsAltair.getAttestationParticipationFlagIndices(
+              state, data, inclusionDelay);
       for (int flagIndex = 0; flagIndex < PARTICIPATION_FLAG_WEIGHTS.size(); flagIndex++) {
         final UInt64 weight = PARTICIPATION_FLAG_WEIGHTS.get(flagIndex);
 
