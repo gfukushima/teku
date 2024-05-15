@@ -67,7 +67,7 @@ public class SigningRootUtil {
     final Bytes32 domain =
         spec.getDomain(
             Domain.BEACON_ATTESTER,
-            attestationData.getTarget().getEpoch(),
+            spec.computeEpochAtSlot(attestationData.getSlot()),
             forkInfo.getFork(),
             forkInfo.getGenesisValidatorsRoot());
     return specVersion.miscHelpers().computeSigningRoot(attestationData, domain);
