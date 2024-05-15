@@ -31,7 +31,6 @@ import tech.pegasys.teku.spec.config.SpecConfigAltair;
 import tech.pegasys.teku.spec.constants.Domain;
 import tech.pegasys.teku.spec.constants.ParticipationFlags;
 import tech.pegasys.teku.spec.datastructures.operations.AttestationData;
-import tech.pegasys.teku.spec.datastructures.state.Checkpoint;
 import tech.pegasys.teku.spec.datastructures.state.SyncCommittee;
 import tech.pegasys.teku.spec.datastructures.state.Validator;
 import tech.pegasys.teku.spec.datastructures.state.beaconstate.BeaconState;
@@ -174,21 +173,12 @@ public class BeaconStateAccessorsAltair extends BeaconStateAccessors {
    */
   public List<Integer> getAttestationParticipationFlagIndices(
       final BeaconState state, final AttestationData data, final UInt64 inclusionDelay) {
-    final Checkpoint justifiedCheckpoint;
-    if (data.getTarget().getEpoch().equals(getCurrentEpoch(state))) {
-      justifiedCheckpoint = state.getCurrentJustifiedCheckpoint();
-    } else {
-      justifiedCheckpoint = state.getPreviousJustifiedCheckpoint();
-    }
-
-    // Matching roots
-    final boolean isMatchingSource = data.getSource().equals(justifiedCheckpoint);
+    final UInt64 epoch = miscHelpers.computeEpochAtSlot(data.getSlot());
+    final Bytes32 blockRoot = getBlockRootAtSlot(state, data.getSlot());
+    final boolean isMatchingSource = data.getSource().equals(state.getCurrentJustifiedCheckpoint());
     final boolean isMatchingTarget =
-        isMatchingSource
-            && data.getTarget().getRoot().equals(getBlockRoot(state, data.getTarget().getEpoch()));
-    final boolean isMatchingHead =
-        isMatchingTarget
-            && data.getBeaconBlockRoot().equals(getBlockRootAtSlot(state, data.getSlot()));
+        isMatchingSource && blockRoot.equals(getBlockRoot(state, epoch));
+    final boolean isMatchingHead = isMatchingTarget && data.getBeaconBlockRoot().equals(blockRoot);
 
     // Participation flag indices
     final IntList participationFlagIndices = new IntArrayList();

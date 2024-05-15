@@ -11,8 +11,6 @@
  * specific language governing permissions and limitations under the License.
  */
 
-package tech.pegasys.teku.spec.logic.common.util;
-
 import static com.google.common.base.Preconditions.checkArgument;
 import static tech.pegasys.teku.infrastructure.async.SafeFuture.completedFuture;
 
@@ -82,9 +80,15 @@ public abstract class AttestationUtil {
       final AttestationData data1, final AttestationData data2) {
     return (
     // case 1: double vote || case 2: surround vote
-    (!data1.equals(data2) && data1.getTarget().getEpoch().equals(data2.getTarget().getEpoch()))
+    (!data1.equals(data2)
+            && miscHelpers
+                .computeEpochAtSlot(data1.getSlot())
+                .equals(miscHelpers.computeEpochAtSlot(data2.getSlot())))
         || (data1.getSource().getEpoch().compareTo(data2.getSource().getEpoch()) < 0
-            && data2.getTarget().getEpoch().compareTo(data1.getTarget().getEpoch()) < 0));
+            && miscHelpers
+                    .computeEpochAtSlot(data2.getSlot())
+                    .compareTo(miscHelpers.computeEpochAtSlot(data1.getSlot()))
+                < 0));
   }
 
   /**
@@ -256,7 +260,7 @@ public abstract class AttestationUtil {
     final Bytes32 domain =
         beaconStateAccessors.getDomain(
             Domain.BEACON_ATTESTER,
-            indexedAttestation.getData().getTarget().getEpoch(),
+            miscHelpers.computeEpochAtSlot(indexedAttestation.getData().getSlot()),
             fork,
             state.getGenesisValidatorsRoot());
     final Bytes signingRoot = miscHelpers.computeSigningRoot(indexedAttestation.getData(), domain);

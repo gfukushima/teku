@@ -16,10 +16,10 @@ package tech.pegasys.teku.spec.datastructures.state.beaconstate.versions.phase0;
 import java.util.HashMap;
 import java.util.Map;
 import org.apache.tuweni.bytes.Bytes32;
-import tech.pegasys.teku.infrastructure.ssz.SszList;
-import tech.pegasys.teku.infrastructure.ssz.collections.SszBitlist;
 import tech.pegasys.teku.infrastructure.unsigned.UInt64;
 import tech.pegasys.teku.spec.datastructures.state.PendingAttestation;
+import tech.pegasys.teku.spec.datastructures.util.AttestationProcessingResult;
+import tech.pegasys.teku.spec.datastructures.util.AttestationUtil;
 
 interface ValidatorStatsPhase0 extends BeaconStatePhase0 {
   @Override
@@ -33,12 +33,12 @@ interface ValidatorStatsPhase0 extends BeaconStatePhase0 {
   }
 
   private CorrectAndLiveValidators getValidatorStats(
-      final SszList<PendingAttestation> attestations, final Bytes32 correctTargetRoot) {
+      final Iterable<PendingAttestation> attestations, final Bytes32 correctTargetRoot) {
 
-    final Map<UInt64, Map<UInt64, SszBitlist>> liveValidatorsAggregationBitsBySlotAndCommittee =
-        new HashMap<>();
-    final Map<UInt64, Map<UInt64, SszBitlist>> correctValidatorsAggregationBitsBySlotAndCommittee =
-        new HashMap<>();
+    final Map<UInt64, Map<UInt64, AttestationProcessingResult>>
+        liveValidatorsAggregationBitsBySlotAndCommittee = new HashMap<>();
+    final Map<UInt64, Map<UInt64, AttestationProcessingResult>>
+        correctValidatorsAggregationBitsBySlotAndCommittee = new HashMap<>();
 
     attestations.forEach(
         attestation -> {
@@ -48,7 +48,7 @@ interface ValidatorStatsPhase0 extends BeaconStatePhase0 {
                 .merge(
                     attestation.getData().getIndex(),
                     attestation.getAggregationBits(),
-                    SszBitlist::nullableOr);
+                    AttestationUtil::nullableOr);
           }
 
           liveValidatorsAggregationBitsBySlotAndCommittee
@@ -56,19 +56,19 @@ interface ValidatorStatsPhase0 extends BeaconStatePhase0 {
               .merge(
                   attestation.getData().getIndex(),
                   attestation.getAggregationBits(),
-                  SszBitlist::nullableOr);
+                  AttestationUtil::nullableOr);
         });
 
     final int numberOfCorrectValidators =
         correctValidatorsAggregationBitsBySlotAndCommittee.values().stream()
             .flatMap(aggregationBitsByCommittee -> aggregationBitsByCommittee.values().stream())
-            .mapToInt(SszBitlist::getBitCount)
+            .mapToInt(AttestationProcessingResult::getBitCount)
             .sum();
 
     final int numberOfLiveValidators =
         liveValidatorsAggregationBitsBySlotAndCommittee.values().stream()
             .flatMap(aggregationBitsByCommittee -> aggregationBitsByCommittee.values().stream())
-            .mapToInt(SszBitlist::getBitCount)
+            .mapToInt(AttestationProcessingResult::getBitCount)
             .sum();
 
     return new CorrectAndLiveValidators(numberOfCorrectValidators, numberOfLiveValidators);
@@ -76,6 +76,7 @@ interface ValidatorStatsPhase0 extends BeaconStatePhase0 {
 
   private boolean isCorrectAttestation(
       final PendingAttestation attestation, final Bytes32 correctTargetRoot) {
-    return attestation.getData().getTarget().getRoot().equals(correctTargetRoot);
+    // Assuming that the correctTargetRoot is the root of the block at the attestation's slot
+    return attestation.getData().getBeaconBlockRoot().equals(correctTargetRoot);
   }
 }

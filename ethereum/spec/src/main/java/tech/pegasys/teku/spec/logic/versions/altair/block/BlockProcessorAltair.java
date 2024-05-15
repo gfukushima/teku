@@ -151,14 +151,13 @@ public class BlockProcessorAltair extends AbstractBlockProcessor {
       final IndexedAttestationProvider indexedAttestationProvider) {
     final AttestationData data = attestation.getData();
 
-    final List<Integer> participationFlagIndices =
-        beaconStateAccessorsAltair.getAttestationParticipationFlagIndices(
-            state, data, state.getSlot().minus(data.getSlot()));
+    final boolean forCurrentEpoch =
+        miscHelpers
+            .computeEpochAtSlot(data.getSlot())
+            .equals(beaconStateAccessors.getCurrentEpoch(state));
 
     // Update epoch participation flags
     final SszMutableList<SszByte> epochParticipation;
-    final boolean forCurrentEpoch =
-        data.getTarget().getEpoch().equals(beaconStateAccessors.getCurrentEpoch(state));
     if (forCurrentEpoch) {
       epochParticipation = state.getCurrentEpochParticipation();
     } else {
