@@ -11,6 +11,8 @@
  * specific language governing permissions and limitations under the License.
  */
 
+package tech.pegasys.teku.spec.logic.common.util;
+
 import static com.google.common.base.Preconditions.checkArgument;
 import static tech.pegasys.teku.infrastructure.async.SafeFuture.completedFuture;
 
@@ -288,16 +290,11 @@ public abstract class AttestationUtil {
     final UInt64 epoch = miscHelpers.computeEpochAtSlot(slot);
     // Get variables necessary that can be shared among Attestations of all validators
     final Bytes32 beaconBlockRoot = block.getRoot();
-    final UInt64 startSlot = miscHelpers.computeStartSlotAtEpoch(epoch);
-    final Bytes32 epochBoundaryBlockRoot =
-        startSlot.compareTo(slot) == 0 || state.getSlot().compareTo(startSlot) <= 0
-            ? block.getRoot()
-            : beaconStateAccessors.getBlockRootAtSlot(state, startSlot);
+
     final Checkpoint source = state.getCurrentJustifiedCheckpoint();
-    final Checkpoint target = new Checkpoint(epoch, epochBoundaryBlockRoot);
 
     // Set attestation data
-    return new AttestationData(slot, committeeIndex, beaconBlockRoot, source, target);
+    return new AttestationData(slot, beaconBlockRoot, source);
   }
 
   public abstract Optional<SlotInclusionGossipValidationResult>

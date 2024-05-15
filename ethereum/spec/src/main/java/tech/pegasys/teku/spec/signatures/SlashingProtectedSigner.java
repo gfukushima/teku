@@ -45,14 +45,17 @@ public class SlashingProtectedSigner implements Signer {
   private final BLSPublicKey validatorPublicKey;
   private final SlashingProtector slashingProtector;
   private final Signer delegate;
+  private final Spec spec; // Added field to hold the Spec instance
 
   public SlashingProtectedSigner(
       final BLSPublicKey validatorPublicKey,
       final SlashingProtector slashingProtector,
-      final Signer delegate) {
+      final Signer delegate,
+      final Spec spec) { // Updated constructor to accept Spec parameter
     this.validatorPublicKey = validatorPublicKey;
     this.slashingProtector = slashingProtector;
     this.delegate = delegate;
+    this.spec = spec; // Store the provided Spec instance
   }
 
   @Override
@@ -71,7 +74,7 @@ public class SlashingProtectedSigner implements Signer {
             validatorPublicKey,
             forkInfo.getGenesisValidatorsRoot(),
             attestationData.getSource().getEpoch(),
-            attestationData.getTarget().getEpoch())
+            spec.computeEpochAtSlot(attestationData.getSlot()))
         .thenAccept(verifySigningAllowed(slashableAttestationMessage(attestationData)))
         .thenCompose(__ -> delegate.signAttestationData(attestationData, forkInfo));
   }
@@ -90,7 +93,7 @@ public class SlashingProtectedSigner implements Signer {
             + " with source epoch "
             + attestationData.getSource().getEpoch()
             + " and target epoch "
-            + attestationData.getTarget().getEpoch()
+            + spec.computeEpochAtSlot(attestationData.getSlot())
             + " because it may violate a slashing condition";
   }
 
