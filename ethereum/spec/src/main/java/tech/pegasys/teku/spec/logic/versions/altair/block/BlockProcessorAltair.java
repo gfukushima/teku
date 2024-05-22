@@ -151,14 +151,13 @@ public class BlockProcessorAltair extends AbstractBlockProcessor {
       final IndexedAttestationProvider indexedAttestationProvider) {
     final AttestationData data = attestation.getData();
 
-    final List<Integer> participationFlagIndices =
-        beaconStateAccessorsAltair.getAttestationParticipationFlagIndices(
-            state, data, state.getSlot().minus(data.getSlot()));
+    final boolean forCurrentEpoch =
+        miscHelpers
+            .computeEpochAtSlot(data.getSlot())
+            .equals(beaconStateAccessors.getCurrentEpoch(state));
 
     // Update epoch participation flags
     final SszMutableList<SszByte> epochParticipation;
-    final boolean forCurrentEpoch =
-        data.getTarget().getEpoch().equals(beaconStateAccessors.getCurrentEpoch(state));
     if (forCurrentEpoch) {
       epochParticipation = state.getCurrentEpochParticipation();
     } else {
@@ -173,6 +172,11 @@ public class BlockProcessorAltair extends AbstractBlockProcessor {
       final byte previousParticipationFlags = epochParticipation.get(index).get();
       byte newParticipationFlags = 0;
       final UInt64 baseReward = beaconStateAccessorsAltair.getBaseReward(state, index);
+      // Calculate the inclusion delay based on the state's slot and the attestation data slot
+      final UInt64 inclusionDelay = state.getSlot().minus(data.getSlot());
+      List<Integer> participationFlagIndices =
+          beaconStateAccessorsAltair.getAttestationParticipationFlagIndices(
+              state, data, inclusionDelay);
       for (int flagIndex = 0; flagIndex < PARTICIPATION_FLAG_WEIGHTS.size(); flagIndex++) {
         final UInt64 weight = PARTICIPATION_FLAG_WEIGHTS.get(flagIndex);
 

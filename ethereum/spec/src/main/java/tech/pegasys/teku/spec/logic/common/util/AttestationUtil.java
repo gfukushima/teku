@@ -82,9 +82,15 @@ public abstract class AttestationUtil {
       final AttestationData data1, final AttestationData data2) {
     return (
     // case 1: double vote || case 2: surround vote
-    (!data1.equals(data2) && data1.getTarget().getEpoch().equals(data2.getTarget().getEpoch()))
+    (!data1.equals(data2)
+            && miscHelpers
+                .computeEpochAtSlot(data1.getSlot())
+                .equals(miscHelpers.computeEpochAtSlot(data2.getSlot())))
         || (data1.getSource().getEpoch().compareTo(data2.getSource().getEpoch()) < 0
-            && data2.getTarget().getEpoch().compareTo(data1.getTarget().getEpoch()) < 0));
+            && miscHelpers
+                    .computeEpochAtSlot(data2.getSlot())
+                    .compareTo(miscHelpers.computeEpochAtSlot(data1.getSlot()))
+                < 0));
   }
 
   /**
@@ -256,7 +262,7 @@ public abstract class AttestationUtil {
     final Bytes32 domain =
         beaconStateAccessors.getDomain(
             Domain.BEACON_ATTESTER,
-            indexedAttestation.getData().getTarget().getEpoch(),
+            miscHelpers.computeEpochAtSlot(indexedAttestation.getData().getSlot()),
             fork,
             state.getGenesisValidatorsRoot());
     final Bytes signingRoot = miscHelpers.computeSigningRoot(indexedAttestation.getData(), domain);
@@ -284,16 +290,11 @@ public abstract class AttestationUtil {
     final UInt64 epoch = miscHelpers.computeEpochAtSlot(slot);
     // Get variables necessary that can be shared among Attestations of all validators
     final Bytes32 beaconBlockRoot = block.getRoot();
-    final UInt64 startSlot = miscHelpers.computeStartSlotAtEpoch(epoch);
-    final Bytes32 epochBoundaryBlockRoot =
-        startSlot.compareTo(slot) == 0 || state.getSlot().compareTo(startSlot) <= 0
-            ? block.getRoot()
-            : beaconStateAccessors.getBlockRootAtSlot(state, startSlot);
+
     final Checkpoint source = state.getCurrentJustifiedCheckpoint();
-    final Checkpoint target = new Checkpoint(epoch, epochBoundaryBlockRoot);
 
     // Set attestation data
-    return new AttestationData(slot, committeeIndex, beaconBlockRoot, source, target);
+    return new AttestationData(slot, beaconBlockRoot, source);
   }
 
   public abstract Optional<SlotInclusionGossipValidationResult>

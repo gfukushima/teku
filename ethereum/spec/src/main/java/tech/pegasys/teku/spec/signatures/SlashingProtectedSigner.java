@@ -22,6 +22,7 @@ import tech.pegasys.teku.bls.BLSPublicKey;
 import tech.pegasys.teku.bls.BLSSignature;
 import tech.pegasys.teku.infrastructure.async.SafeFuture;
 import tech.pegasys.teku.infrastructure.unsigned.UInt64;
+import tech.pegasys.teku.spec.Spec;
 import tech.pegasys.teku.spec.datastructures.blocks.BeaconBlock;
 import tech.pegasys.teku.spec.datastructures.builder.ValidatorRegistration;
 import tech.pegasys.teku.spec.datastructures.operations.AggregateAndProof;
@@ -45,14 +46,17 @@ public class SlashingProtectedSigner implements Signer {
   private final BLSPublicKey validatorPublicKey;
   private final SlashingProtector slashingProtector;
   private final Signer delegate;
+  private final Spec spec; // Added field to hold the Spec instance
 
   public SlashingProtectedSigner(
       final BLSPublicKey validatorPublicKey,
       final SlashingProtector slashingProtector,
-      final Signer delegate) {
+      final Signer delegate,
+      final Spec spec) { // Updated constructor to accept Spec parameter
     this.validatorPublicKey = validatorPublicKey;
     this.slashingProtector = slashingProtector;
     this.delegate = delegate;
+    this.spec = spec; // Store the provided Spec instance
   }
 
   @Override
@@ -71,7 +75,7 @@ public class SlashingProtectedSigner implements Signer {
             validatorPublicKey,
             forkInfo.getGenesisValidatorsRoot(),
             attestationData.getSource().getEpoch(),
-            attestationData.getTarget().getEpoch())
+            spec.computeEpochAtSlot(attestationData.getSlot()))
         .thenAccept(verifySigningAllowed(slashableAttestationMessage(attestationData)))
         .thenCompose(__ -> delegate.signAttestationData(attestationData, forkInfo));
   }
@@ -90,7 +94,7 @@ public class SlashingProtectedSigner implements Signer {
             + " with source epoch "
             + attestationData.getSource().getEpoch()
             + " and target epoch "
-            + attestationData.getTarget().getEpoch()
+            + spec.computeEpochAtSlot(attestationData.getSlot())
             + " because it may violate a slashing condition";
   }
 
