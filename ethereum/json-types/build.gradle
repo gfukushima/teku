@@ -4,6 +4,7 @@ dependencies {
     implementation project(':data:serializer')
     implementation project(':infrastructure:restapi')
     implementation project(':infrastructure:http')
+    implementation project(':infrastructure:bls') // Added dependency for BLS infrastructure
 
     testImplementation testFixtures(project(':ethereum:spec'))
 }

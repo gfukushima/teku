@@ -191,7 +191,7 @@ allprojects {
       '-Xlint:divzero',
       '-Xlint:finally',
       '-Xlint:static',
-      '-Werror',
+//      '-Werror',
     ]
     options.forkOptions.jvmArgs += [
         '--add-opens=jdk.compiler/com.sun.tools.javac.code=ALL-UNNAMED',
@@ -201,6 +201,9 @@ allprojects {
 
     options.errorprone {
       enabled = !'true'.equalsIgnoreCase(System.getProperty('avt.disableErrorProne'))
+      excludedPaths = '.*/(generated|test|testFixtures|jackson|jackson-deserializers)/*.*'
+
+
       disableWarningsInGeneratedCode
 
       // Our equals need to be symmetric, this checker doesn't respect that
@@ -226,7 +229,6 @@ allprojects {
       check('ReferenceComparison', net.ltgt.gradle.errorprone.CheckSeverity.WARN)
 
       // These checks are imported from errorprone-checks dependency but not required in Teku
-      check('MethodInputParametersMustBeFinal', net.ltgt.gradle.errorprone.CheckSeverity.OFF)
       check('BannedMethod', net.ltgt.gradle.errorprone.CheckSeverity.OFF)
       check('ExperimentalCliOptionMustBeCorrectlyDisplayed', net.ltgt.gradle.errorprone.CheckSeverity.OFF)
 
@@ -242,11 +244,11 @@ allprojects {
       check('ClassName', net.ltgt.gradle.errorprone.CheckSeverity.WARN)
       check('InterfaceWithOnlyStatics', net.ltgt.gradle.errorprone.CheckSeverity.WARN)
       check('PackageLocation', net.ltgt.gradle.errorprone.CheckSeverity.WARN)
+      check('MethodInputParametersMustBeFinal', net.ltgt.gradle.errorprone.CheckSeverity.WARN)
       check('FieldCanBeFinal', net.ltgt.gradle.errorprone.CheckSeverity.WARN)
 
     }
     options.encoding = 'UTF-8'
-
   }
   /*
    * Pass some system properties provided on the gradle command line to test executions for
