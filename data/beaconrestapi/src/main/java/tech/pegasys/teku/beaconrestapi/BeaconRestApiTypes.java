@@ -44,7 +44,6 @@ import static tech.pegasys.teku.infrastructure.http.RestApiConstants.REQUIRE_PRE
 import static tech.pegasys.teku.infrastructure.http.RestApiConstants.REQUIRE_PREPARED_PROPOSERS_DESCRIPTION;
 import static tech.pegasys.teku.infrastructure.http.RestApiConstants.REQUIRE_VALIDATOR_REGISTRATIONS;
 import static tech.pegasys.teku.infrastructure.http.RestApiConstants.REQUIRE_VALIDATOR_REGISTRATIONS_DESCRIPTION;
-import static tech.pegasys.teku.infrastructure.http.RestApiConstants.SKIP_RANDAO_VERIFICATION_PARAM_DESCRIPTION;
 import static tech.pegasys.teku.infrastructure.http.RestApiConstants.SLOT;
 import static tech.pegasys.teku.infrastructure.http.RestApiConstants.START_PERIOD;
 import static tech.pegasys.teku.infrastructure.http.RestApiConstants.STATUS;
@@ -140,11 +139,6 @@ public class BeaconRestApiTypes {
           RestApiConstants.RANDAO_REVEAL,
           SIGNATURE_TYPE.withDescription(
               "`BLSSignature Hex` BLS12-381 signature for the current epoch."));
-
-  public static final ParameterMetadata<Boolean> SKIP_RANDAO_VERIFICATION_PARAMETER =
-      new ParameterMetadata<>(
-          RestApiConstants.SKIP_RANDAO_VERIFICATION,
-          BOOLEAN_TYPE.withDescription(SKIP_RANDAO_VERIFICATION_PARAM_DESCRIPTION));
 
   public static final ParameterMetadata<UInt64> BUILDER_BOOST_FACTOR_PARAMETER =
       new ParameterMetadata<>(
