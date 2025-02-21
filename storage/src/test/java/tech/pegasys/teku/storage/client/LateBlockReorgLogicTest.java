@@ -280,6 +280,7 @@ class LateBlockReorgLogicTest {
     withLateBlock(blockRoot);
     withHeadBlock();
     withProposerBoostRoot(dataStructureUtil.randomBytes32());
+    when(store.satisfiesInclusionList(blockRoot)).thenReturn(true);
     assertThat(reorgLogicInstrumented.getProposerHead(blockRoot, UInt64.ONE)).isEqualTo(blockRoot);
   }
 
@@ -288,6 +289,7 @@ class LateBlockReorgLogicTest {
     withTimelyBlock(blockRoot);
     withHeadBlock();
     withProposerBoostRoot(null);
+    when(store.satisfiesInclusionList(blockRoot)).thenReturn(true);
     assertThat(reorgLogicInstrumented.getProposerHead(blockRoot, UInt64.ONE)).isEqualTo(blockRoot);
   }
 
@@ -298,7 +300,7 @@ class LateBlockReorgLogicTest {
     when(store.getProposerBoostRoot()).thenReturn(Optional.empty());
     when(store.getFinalizedCheckpoint())
         .thenReturn(dataStructureUtil.randomCheckpoint(UInt64.ZERO));
-
+    when(store.satisfiesInclusionList(blockRoot)).thenReturn(true);
     assertThat(reorgLogicInstrumented.getProposerHead(blockRoot, UInt64.valueOf(8)))
         .isEqualTo(blockRoot);
   }
@@ -309,6 +311,7 @@ class LateBlockReorgLogicTest {
     when(store.getProposerBoostRoot()).thenReturn(Optional.empty());
     when(store.getFinalizedCheckpoint())
         .thenReturn(dataStructureUtil.randomCheckpoint(UInt64.ZERO));
+    when(store.satisfiesInclusionList(blockRoot)).thenReturn(true);
     assertThat(reorgLogicInstrumented.getProposerHead(blockRoot, UInt64.ONE)).isEqualTo(blockRoot);
   }
 
@@ -319,7 +322,7 @@ class LateBlockReorgLogicTest {
     when(store.getProposerBoostRoot()).thenReturn(Optional.empty());
     when(store.getFinalizedCheckpoint())
         .thenReturn(dataStructureUtil.randomCheckpoint(UInt64.ZERO));
-
+    when(store.satisfiesInclusionList(any())).thenReturn(true);
     assertThat(reorgLogicInstrumented.getProposerHead(blockRoot, UInt64.valueOf(25)))
         .isEqualTo(blockRoot);
   }
@@ -468,6 +471,7 @@ class LateBlockReorgLogicTest {
     withLateBlock(blockRoot);
     withHeadBlock();
     when(store.getProposerBoostRoot()).thenReturn(Optional.empty());
+    when(store.satisfiesInclusionList(any())).thenReturn(true);
     when(store.getFinalizedCheckpoint())
         .thenReturn(dataStructureUtil.randomCheckpoint(UInt64.ZERO));
   }
