@@ -22,6 +22,7 @@ import java.util.function.Supplier;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.tuweni.bytes.Bytes32;
+import org.web3j.protocol.core.methods.response.Log;
 import tech.pegasys.teku.infrastructure.collections.LimitedMap;
 import tech.pegasys.teku.infrastructure.time.TimeProvider;
 import tech.pegasys.teku.infrastructure.unsigned.UInt64;
@@ -173,16 +174,21 @@ public class LateBlockReorgLogic {
     // isFfgCompetitive, isSingleSlotReorg
     if ((!isFfgCompetitive || !isSingleSlotReorg) && satisfiesInclusionList) {
       LOG.debug(
-          "getProposerHead - return headRoot - isFfgCompetitive {}, isSingleSlotReorg {}",
+          "getProposerHead - return headRoot - isFfgCompetitive {}, isSingleSlotReorg {}, satisfiesInclusionList {}",
           isFfgCompetitive,
-          isSingleSlotReorg);
+          isSingleSlotReorg,
+          satisfiesInclusionList);
       return headRoot;
     }
     final boolean isHeadWeak = getStore().isHeadWeak(headRoot);
     final boolean isParentStrong = getStore().isParentStrong(head.getParentRoot());
     // finally, the parent must be strong, and the current head must be weak.
     if ((isHeadWeak && isParentStrong) || !satisfiesInclusionList) {
-      LOG.debug("getProposerHead - return parentRoot - isHeadWeak true && isParentStrong true");
+      LOG.debug(
+          "getProposerHead - return headRoot - isHeadWeak {}, isParentStrong {}, satisfiesInclusionList {}",
+          isHeadWeak,
+          isParentStrong,
+          satisfiesInclusionList);
       return head.getParentRoot();
     }
 
