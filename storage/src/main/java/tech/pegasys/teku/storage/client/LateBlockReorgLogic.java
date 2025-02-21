@@ -142,23 +142,26 @@ public class LateBlockReorgLogic {
     final boolean isShufflingStableAndForkChoiceOk = isForkChoiceStableAndFinalizationOk(slot);
     final boolean isProposingOnTime = isProposingOnTime(slot);
     final boolean isHeadLate = isBlockLate(headRoot);
+    final boolean satisfiesInclusionList = getStore().satisfiesInclusionList(headRoot);
     final Optional<SignedBeaconBlock> maybeHead = getStore().getBlockIfAvailable(headRoot);
     // cheap checks of that list:
     // (isHeadLate, isShufflingStable, isFinalizationOk, isProposingOnTime);
     // and  isProposerBoostActive (assert condition);
     // finally need head block to make further checks
-    if (!isHeadLate
+    if ((!isHeadLate
         || !isShufflingStableAndForkChoiceOk
         || !isProposingOnTime
         || isProposerBoostActive
-        || maybeHead.isEmpty()) {
+        || maybeHead.isEmpty())
+        && satisfiesInclusionList) {
       LOG.debug(
-          "getProposerHead - return headRoot - isHeadLate {}, isForkChoiceStableAndFinalizationOk {}, isProposingOnTime {}, isProposerBoostActive {}, head.isEmpty {}",
+          "getProposerHead - return headRoot - isHeadLate {}, isForkChoiceStableAndFinalizationOk {}, isProposingOnTime {}, isProposerBoostActive {}, head.isEmpty {}, satisfiesInclusionList {}",
           () -> isHeadLate,
           () -> isShufflingStableAndForkChoiceOk,
           () -> isProposingOnTime,
           () -> isProposerBoostActive,
-          headRoot::isEmpty);
+          headRoot::isEmpty,
+          ()-> satisfiesInclusionList);
       return headRoot;
     }
 
@@ -168,7 +171,7 @@ public class LateBlockReorgLogic {
 
     // from the initial list, check
     // isFfgCompetitive, isSingleSlotReorg
-    if (!isFfgCompetitive || !isSingleSlotReorg) {
+    if ((!isFfgCompetitive || !isSingleSlotReorg) && satisfiesInclusionList) {
       LOG.debug(
           "getProposerHead - return headRoot - isFfgCompetitive {}, isSingleSlotReorg {}",
           isFfgCompetitive,
@@ -178,12 +181,8 @@ public class LateBlockReorgLogic {
     final boolean isHeadWeak = getStore().isHeadWeak(headRoot);
     final boolean isParentStrong = getStore().isParentStrong(head.getParentRoot());
     // finally, the parent must be strong, and the current head must be weak.
-    if (isHeadWeak && isParentStrong) {
+    if ((isHeadWeak && isParentStrong) || !satisfiesInclusionList) {
       LOG.debug("getProposerHead - return parentRoot - isHeadWeak true && isParentStrong true");
-      return head.getParentRoot();
-    }
-    if (!getStore().satisfiesInclusionList(headRoot)) {
-      LOG.debug("getProposerHead - return parentRoot - does not satisfies InclusionList");
       return head.getParentRoot();
     }
 
