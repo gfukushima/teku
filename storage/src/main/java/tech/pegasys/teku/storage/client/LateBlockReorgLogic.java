@@ -22,7 +22,6 @@ import java.util.function.Supplier;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.tuweni.bytes.Bytes32;
-import org.web3j.protocol.core.methods.response.Log;
 import tech.pegasys.teku.infrastructure.collections.LimitedMap;
 import tech.pegasys.teku.infrastructure.time.TimeProvider;
 import tech.pegasys.teku.infrastructure.unsigned.UInt64;
@@ -150,10 +149,10 @@ public class LateBlockReorgLogic {
     // and  isProposerBoostActive (assert condition);
     // finally need head block to make further checks
     if ((!isHeadLate
-        || !isShufflingStableAndForkChoiceOk
-        || !isProposingOnTime
-        || isProposerBoostActive
-        || maybeHead.isEmpty())
+            || !isShufflingStableAndForkChoiceOk
+            || !isProposingOnTime
+            || isProposerBoostActive
+            || maybeHead.isEmpty())
         && satisfiesInclusionList) {
       LOG.debug(
           "getProposerHead - return headRoot - isHeadLate {}, isForkChoiceStableAndFinalizationOk {}, isProposingOnTime {}, isProposerBoostActive {}, head.isEmpty {}, satisfiesInclusionList {}",
@@ -162,7 +161,7 @@ public class LateBlockReorgLogic {
           () -> isProposingOnTime,
           () -> isProposerBoostActive,
           headRoot::isEmpty,
-          ()-> satisfiesInclusionList);
+          () -> satisfiesInclusionList);
       return headRoot;
     }
 
