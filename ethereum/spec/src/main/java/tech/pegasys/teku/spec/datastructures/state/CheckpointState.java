@@ -41,9 +41,10 @@ public class CheckpointState {
     checkArgument(checkpoint.getRoot().equals(block.getRoot()), "Block must match checkpoint root");
     checkArgument(
         state.getSlot().equals(checkpoint.getEpochStartSlot(spec)),
-        "State {} must be advanced to checkpoint epoch boundary slot {}",
-        state.getSlot(),
-        checkpoint.getEpochStartSlot(spec));
+        "State "
+            + state.getSlot()
+            + " must be advanced to checkpoint epoch boundary slot "
+            + checkpoint.getEpochStartSlot(spec));
 
     this.checkpoint = checkpoint;
     this.block = block;
