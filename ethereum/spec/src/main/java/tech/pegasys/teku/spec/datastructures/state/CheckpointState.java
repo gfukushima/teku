@@ -40,7 +40,7 @@ public class CheckpointState {
     checkNotNull(state);
     checkArgument(checkpoint.getRoot().equals(block.getRoot()), "Block must match checkpoint root");
     checkArgument(
-        state.getSlot().equals(checkpoint.getEpochStartSlot(spec)),
+        state.getSlot().isGreaterThanOrEqualTo(checkpoint.getEpochStartSlot(spec)),
         "State "
             + state.getSlot()
             + " must be advanced to checkpoint epoch boundary slot "
