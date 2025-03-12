@@ -53,9 +53,9 @@ public class AnchorPoint extends StateAndBlockSummary {
     //    checkArgument(
     //        checkpoint.getRoot().equals(blockSummary.getRoot()), "Checkpoint and block must
     // match");
-//    checkArgument(
-//        checkpoint.getEpochStartSlot(spec).isGreaterThanOrEqualTo(blockSummary.getSlot()),
-//        "Block must be at or prior to the start of the checkpoint epoch");
+    //    checkArgument(
+    //        checkpoint.getEpochStartSlot(spec).isGreaterThanOrEqualTo(blockSummary.getSlot()),
+    //        "Block must be at or prior to the start of the checkpoint epoch");
 
     this.spec = spec;
     this.checkpoint = checkpoint;
@@ -100,7 +100,8 @@ public class AnchorPoint extends StateAndBlockSummary {
 
       // Calculate closest epoch boundary to use for the checkpoint
       final UInt64 epoch = finalizedState.getFinalizedCheckpoint().getEpoch();
-      final Checkpoint checkpoint = new Checkpoint(epoch, finalizedState.getFinalizedCheckpoint().getRoot());
+      final Checkpoint checkpoint =
+          new Checkpoint(epoch, finalizedState.getFinalizedCheckpoint().getRoot());
 
       return new AnchorPoint(spec, checkpoint, state, header);
     }

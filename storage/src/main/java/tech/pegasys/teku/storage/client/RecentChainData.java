@@ -182,8 +182,10 @@ public abstract class RecentChainData implements StoreUpdateHandler {
 
     // Set the head to the anchor point
 
-    // GCF use state to set head since the anchor block is still the finalized but state is more recent than latest finalized block
-    updateHead(anchorPoint.getState().getLatestBlockHeader().getRoot(), anchorPoint.getState().getSlot());
+    // GCF use state to set head since the anchor block is still the finalized but state is more
+    // recent than latest finalized block
+    updateHead(
+        anchorPoint.getState().getLatestBlockHeader().getRoot(), anchorPoint.getState().getSlot());
     storageUpdateChannel.onChainInitialized(anchorPoint);
   }
 
