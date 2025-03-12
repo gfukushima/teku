@@ -53,9 +53,9 @@ public class AnchorPoint extends StateAndBlockSummary {
     //    checkArgument(
     //        checkpoint.getRoot().equals(blockSummary.getRoot()), "Checkpoint and block must
     // match");
-    checkArgument(
-        checkpoint.getEpochStartSlot(spec).isGreaterThanOrEqualTo(blockSummary.getSlot()),
-        "Block must be at or prior to the start of the checkpoint epoch");
+//    checkArgument(
+//        checkpoint.getEpochStartSlot(spec).isGreaterThanOrEqualTo(blockSummary.getSlot()),
+//        "Block must be at or prior to the start of the checkpoint epoch");
 
     this.spec = spec;
     this.checkpoint = checkpoint;
