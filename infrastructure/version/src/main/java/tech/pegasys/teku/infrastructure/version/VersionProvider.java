@@ -26,7 +26,7 @@ public class VersionProvider {
   public static final String ENV_XDG_DATA_HOME = "XDG_DATA_HOME";
   public static final String ENV_LOCALAPPDATA = "LOCALAPPDATA";
   public static final String ENV_HOME = "HOME";
-  public static final String CLIENT_IDENTITY = "teku";
+  public static final String CLIENT_IDENTITY = "TeKu";
   public static final String IMPLEMENTATION_VERSION = "v" + getImplementationVersion();
   public static final String VERSION =
       CLIENT_IDENTITY + "/" + IMPLEMENTATION_VERSION + "/" + detectOS() + "/" + detectJvm();
