@@ -704,6 +704,11 @@ public class ValidatorConfig {
       return this;
     }
 
+    public Builder isUserAgentTekuEnabled(final boolean isUserAgentTekuEnabled) {
+      this.isUserAgentTekuEnabled = isUserAgentTekuEnabled;
+      return this;
+    }
+
     public ValidatorConfig build() {
       validateExternalSignerUrlAndPublicKeys();
       validateExternalSignerKeystoreAndPasswordFileConfig();

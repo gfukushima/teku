@@ -97,7 +97,18 @@ public class ValidatorClientOptions {
       fallbackValue = "true")
   private boolean attestationsV2ApisEnabled = ValidatorConfig.DEFAULT_ATTESTATIONS_V2_APIS_ENABLED;
 
-  public void configure(final TekuConfiguration.Builder builder) {
+    @Option(
+            names = {"--Xuser-agent-teku-enabled"},
+            paramLabel = "<BOOLEAN>",
+            description =
+                    "Enable the user agent teku header in requests from the validator client",
+            hidden = true,
+            showDefaultValue = CommandLine.Help.Visibility.ALWAYS,
+            arity = "0..1",
+            fallbackValue = "true")
+    private boolean isUserAgentTekuEnabled = ValidatorConfig.DEFAULT_USER_AGENT_TEKU_ENABLED;
+
+    public void configure(final TekuConfiguration.Builder builder) {
     configureBeaconNodeApiEndpoints();
 
     builder.validator(
@@ -111,7 +122,8 @@ public class ValidatorClientOptions {
                 .failoversPublishSignedDutiesEnabled(failoversPublishSignedDutiesEnabled)
                 .sentryNodeConfigurationFile(exclusiveParams.sentryConfigFile)
                 .obolDvtSelectionsEndpointEnabled(obolDvtSelectionsEndpointEnabled)
-                .attestationsV2ApisEnabled(attestationsV2ApisEnabled));
+                .attestationsV2ApisEnabled(attestationsV2ApisEnabled)
+                .isUserAgentTekuEnabled(isUserAgentTekuEnabled));
   }
 
   private void configureBeaconNodeApiEndpoints() {

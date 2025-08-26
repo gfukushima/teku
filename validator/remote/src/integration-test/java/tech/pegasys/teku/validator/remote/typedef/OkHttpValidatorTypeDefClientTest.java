@@ -113,10 +113,10 @@ class OkHttpValidatorTypeDefClientTest extends AbstractTypeDefRequestTestBase {
     super.beforeEach(specContext);
     typeDefClient =
         new OkHttpValidatorTypeDefClient(
-            okHttpClient, mockWebServer.url("/"), specContext.getSpec(), false, false);
+            okHttpClient, mockWebServer.url("/"), specContext.getSpec(), false, false,true);
     okHttpValidatorTypeDefClientWithPreferredSsz =
         new OkHttpValidatorTypeDefClient(
-            okHttpClient, mockWebServer.url("/"), specContext.getSpec(), true, false);
+            okHttpClient, mockWebServer.url("/"), specContext.getSpec(), true, false,true);
     sszRegisterValidatorsRequest =
         new RegisterValidatorsRequest(mockWebServer.url("/"), okHttpClient, true);
   }
@@ -1080,6 +1080,17 @@ class OkHttpValidatorTypeDefClientTest extends AbstractTypeDefRequestTestBase {
         .hasMessage("Missing required parameter: committee index");
     assertThat(mockWebServer.getRequestCount()).isZero();
   }
+
+    @TestTemplate
+    public void shouldIncludeUserAgentTekuInRequestHeader() throws InterruptedException {
+        final Bytes32 attestationHashTreeRoot = Bytes32.random();
+
+        mockWebServer.enqueue(new MockResponse().setResponseCode(SC_NOT_FOUND));
+        typeDefClient.createAggregate(
+                        UInt64.ONE, attestationHashTreeRoot, Optional.of(dataStructureUtil.randomUInt64()));
+        final RecordedRequest request = mockWebServer.takeRequest();
+        assertThat(request.getHeader("User-Agent")).contains("teku/v");
+    }
 
   private AttesterDuty randomAttesterDuty() {
     return new AttesterDuty(
