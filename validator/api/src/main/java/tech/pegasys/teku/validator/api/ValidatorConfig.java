@@ -381,7 +381,8 @@ public class ValidatorConfig {
   public boolean isAttestationsV2ApisEnabled() {
     return attestationsV2ApisEnabled;
   }
-    public boolean isUserAgentTekuEnabled() {
+
+  public boolean isUserAgentTekuEnabled() {
     return isUserAgentTekuEnabled;
   }
 

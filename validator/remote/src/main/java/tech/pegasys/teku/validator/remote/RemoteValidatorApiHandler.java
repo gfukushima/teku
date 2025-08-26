@@ -383,7 +383,12 @@ public class RemoteValidatorApiHandler implements RemoteValidatorApiChannel {
       final boolean userAgentTekuEnabled) {
     final OkHttpValidatorTypeDefClient typeDefClient =
         new OkHttpValidatorTypeDefClient(
-            httpClient, endpoint, spec, preferSszBlockEncoding, attestationsV2ApisEnabled, userAgentTekuEnabled);
+            httpClient,
+            endpoint,
+            spec,
+            preferSszBlockEncoding,
+            attestationsV2ApisEnabled,
+            userAgentTekuEnabled);
     return new RemoteValidatorApiHandler(
         endpoint, typeDefClient, asyncRunner, readinessAsyncRunner, usePostValidatorsEndpoint);
   }

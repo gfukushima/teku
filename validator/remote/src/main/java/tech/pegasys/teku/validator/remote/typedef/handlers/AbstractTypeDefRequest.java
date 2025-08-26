@@ -123,9 +123,9 @@ public abstract class AbstractTypeDefRequest {
     }
 
     final Request.Builder builder = requestBuilder().url(httpUrlBuilder.build());
-  if (isUserAgentEnabled) {
+    if (isUserAgentEnabled) {
       builder.addHeader(USER_AGENT_HEADER.getKey(), USER_AGENT_HEADER.getValue());
-  }
+    }
     if (headers != null && !headers.isEmpty()) {
       headers.forEach(builder::addHeader);
     }
@@ -201,9 +201,9 @@ public abstract class AbstractTypeDefRequest {
       queryParams.forEach(httpUrlBuilder::addQueryParameter);
     }
     final Request.Builder builder = requestBuilder();
-      if (isUserAgentEnabled) {
-          builder.addHeader(USER_AGENT_HEADER.getKey(), USER_AGENT_HEADER.getValue());
-      }
+    if (isUserAgentEnabled) {
+      builder.addHeader(USER_AGENT_HEADER.getKey(), USER_AGENT_HEADER.getValue());
+    }
     headers.forEach(builder::addHeader);
     final Request request =
         builder

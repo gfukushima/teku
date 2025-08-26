@@ -112,7 +112,7 @@ public class RemoteBeaconNodeApi implements BeaconNodeApi {
             asyncRunner,
             readinessAsyncRunner,
             validatorConfig.isAttestationsV2ApisEnabled(),
-                validatorConfig.isUserAgentTekuEnabled());
+            validatorConfig.isUserAgentTekuEnabled());
     final List<? extends RemoteValidatorApiChannel> failoverValidatorApis =
         failoverEndpoints.stream()
             .map(
@@ -126,7 +126,7 @@ public class RemoteBeaconNodeApi implements BeaconNodeApi {
                         asyncRunner,
                         readinessAsyncRunner,
                         validatorConfig.isAttestationsV2ApisEnabled(),
-                            validatorConfig.isUserAgentTekuEnabled()))
+                        validatorConfig.isUserAgentTekuEnabled()))
             .toList();
 
     final EventChannels eventChannels = services.getEventChannels();

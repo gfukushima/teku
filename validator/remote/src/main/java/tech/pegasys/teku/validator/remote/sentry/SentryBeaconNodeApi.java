@@ -240,7 +240,7 @@ public class SentryBeaconNodeApi implements BeaconNodeApi {
                         asyncRunner,
                         readinessAsyncRunner,
                         validatorConfig.isAttestationsV2ApisEnabled(),
-                            validatorConfig.isUserAgentTekuEnabled()))
+                        validatorConfig.isUserAgentTekuEnabled()))
             .toList();
 
     if (!remoteBeaconNodeEndpoints.getFailoverEndpoints().isEmpty()) {
