@@ -86,18 +86,21 @@ public class OkHttpValidatorTypeDefClient extends OkHttpValidatorMinimalTypeDefC
   private final boolean preferSszBlockEncoding;
   private final SchemaDefinitionCache schemaDefinitionCache;
   private final boolean attestationsV2ApisEnabled;
+  private final boolean userAgentTekuEnabled;
 
   public OkHttpValidatorTypeDefClient(
       final OkHttpClient okHttpClient,
       final HttpUrl baseEndpoint,
       final Spec spec,
       final boolean preferSszBlockEncoding,
-      final boolean attestationsV2ApisEnabled) {
+      final boolean attestationsV2ApisEnabled,
+      final boolean userAgentTekuEnabled) {
     super(baseEndpoint, okHttpClient);
     this.spec = spec;
     schemaDefinitionCache = new SchemaDefinitionCache(spec);
     this.preferSszBlockEncoding = preferSszBlockEncoding;
     this.attestationsV2ApisEnabled = attestationsV2ApisEnabled;
+    this.userAgentTekuEnabled = userAgentTekuEnabled;
   }
 
   public SyncingStatus getSyncingStatus() {

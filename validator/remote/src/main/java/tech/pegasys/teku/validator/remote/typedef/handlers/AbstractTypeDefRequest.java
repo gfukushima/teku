@@ -32,6 +32,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import tech.pegasys.teku.infrastructure.json.JsonUtil;
 import tech.pegasys.teku.infrastructure.json.types.SerializableTypeDefinition;
+import tech.pegasys.teku.infrastructure.version.VersionProvider;
 import tech.pegasys.teku.validator.remote.apiclient.ValidatorApiMethod;
 import tech.pegasys.teku.validator.remote.typedef.ResponseHandler;
 
@@ -39,13 +40,27 @@ public abstract class AbstractTypeDefRequest {
   private static final MediaType APPLICATION_JSON =
       MediaType.parse("application/json; charset=utf-8");
   private static final MediaType OCTET_STREAM = MediaType.parse("application/octet-stream");
+  private static final Map.Entry<String, String> USER_AGENT_HEADER =
+      Map.entry(
+          "User-Agent",
+          VersionProvider.CLIENT_IDENTITY + "/" + VersionProvider.IMPLEMENTATION_VERSION);
   private static final Logger LOG = LogManager.getLogger();
   private final HttpUrl baseEndpoint;
   private final OkHttpClient httpClient;
+  private final boolean isUserAgentEnabled;
 
   public AbstractTypeDefRequest(final HttpUrl baseEndpoint, final OkHttpClient okHttpClient) {
+    this(baseEndpoint, okHttpClient, Optional.empty());
+  }
+
+  public AbstractTypeDefRequest(
+      final HttpUrl baseEndpoint,
+      final OkHttpClient okHttpClient,
+      final Optional<Boolean> userAgentEnabled) {
     this.baseEndpoint = baseEndpoint;
     this.httpClient = okHttpClient;
+    this.isUserAgentEnabled = userAgentEnabled.orElse(true);
+    LOG.info("Using User-Agent: {}: {}", USER_AGENT_HEADER.getKey(), USER_AGENT_HEADER.getValue());
   }
 
   protected HttpUrl.Builder urlBuilder(
@@ -108,6 +123,9 @@ public abstract class AbstractTypeDefRequest {
     }
 
     final Request.Builder builder = requestBuilder().url(httpUrlBuilder.build());
+  if (isUserAgentEnabled) {
+      builder.addHeader(USER_AGENT_HEADER.getKey(), USER_AGENT_HEADER.getValue());
+  }
     if (headers != null && !headers.isEmpty()) {
       headers.forEach(builder::addHeader);
     }
@@ -146,6 +164,9 @@ public abstract class AbstractTypeDefRequest {
     final Request request;
     try {
       final Request.Builder builder = requestBuilder();
+      if (isUserAgentEnabled) {
+        builder.addHeader(USER_AGENT_HEADER.getKey(), USER_AGENT_HEADER.getValue());
+      }
       headers.forEach(builder::addHeader);
       requestBody = JsonUtil.serialize(requestBodyObj, objectTypeDefinition);
       request =
@@ -180,6 +201,9 @@ public abstract class AbstractTypeDefRequest {
       queryParams.forEach(httpUrlBuilder::addQueryParameter);
     }
     final Request.Builder builder = requestBuilder();
+      if (isUserAgentEnabled) {
+          builder.addHeader(USER_AGENT_HEADER.getKey(), USER_AGENT_HEADER.getValue());
+      }
     headers.forEach(builder::addHeader);
     final Request request =
         builder
