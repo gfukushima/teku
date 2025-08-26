@@ -22,6 +22,7 @@ import tech.pegasys.teku.infrastructure.ssz.SszList;
 import tech.pegasys.teku.infrastructure.ssz.collections.SszBitvector;
 import tech.pegasys.teku.infrastructure.ssz.schema.SszListSchema;
 import tech.pegasys.teku.infrastructure.ssz.schema.collections.SszBitvectorSchema;
+import tech.pegasys.teku.infrastructure.ssz.schema.collections.SszUInt64VectorSchema;
 import tech.pegasys.teku.spec.SpecMilestone;
 import tech.pegasys.teku.spec.datastructures.blobs.versions.deneb.Blob;
 import tech.pegasys.teku.spec.datastructures.blobs.versions.deneb.BlobKzgCommitmentsSchema;
@@ -175,6 +176,8 @@ public class SchemaTypes {
       PENDING_CONSOLIDATIONS_SCHEMA = create("PENDING_CONSOLIDATIONS_SCHEMA");
   public static final SchemaId<SszListSchema<PendingDeposit, ?>> PENDING_DEPOSITS_SCHEMA =
       create("PENDING_DEPOSITS_SCHEMA");
+  public static final SchemaId<SszUInt64VectorSchema<?>> PROPOSER_LOOKAHEAD_SCHEMA =
+      create("PROPOSER_LOOKAHEAD_SCHEMA");
   public static final SchemaId<ExecutionPayloadAndBlobsBundleSchema>
       EXECUTION_PAYLOAD_AND_BLOBS_BUNDLE_SCHEMA =
           create("EXECUTION_PAYLOAD_AND_BLOBS_BUNDLE_SCHEMA");

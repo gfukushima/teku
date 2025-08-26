@@ -14,6 +14,7 @@
 package tech.pegasys.teku.spec.datastructures.state.beaconstate.versions.fulu;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static tech.pegasys.teku.spec.schemas.registry.SchemaTypes.PROPOSER_LOOKAHEAD_SCHEMA;
 
 import com.google.common.annotations.VisibleForTesting;
 import java.util.List;
@@ -44,17 +45,14 @@ public class BeaconStateSchemaFulu
     super("BeaconStateFulu", getUniqueFields(specConfig, schemaRegistry), specConfig);
   }
 
-  private static List<SszField> getUniqueFields(
+  public static List<SszField> getUniqueFields(
       final SpecConfig specConfig, final SchemaRegistry schemaRegistry) {
     final List<SszField> newFields =
         List.of(
             new SszField(
                 PROPOSER_LOOKAHEAD_FIELD_INDEX,
                 BeaconStateFields.PROPOSER_LOOKAHEAD,
-                () ->
-                    SszUInt64VectorSchema.create(
-                        (long) (specConfig.getMinSeedLookahead() + 1)
-                            * specConfig.getSlotsPerEpoch())));
+                () -> schemaRegistry.get(PROPOSER_LOOKAHEAD_SCHEMA)));
 
     return Stream.concat(
             BeaconStateSchemaElectra.getUniqueFields(specConfig, schemaRegistry).stream(),
