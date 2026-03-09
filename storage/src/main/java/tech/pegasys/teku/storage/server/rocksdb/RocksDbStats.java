@@ -15,6 +15,9 @@ package tech.pegasys.teku.storage.server.rocksdb;
 
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 import org.apache.logging.log4j.LogManager;
@@ -36,6 +39,7 @@ import org.rocksdb.TickerType;
  */
 public class RocksDbStats implements AutoCloseable {
   private static final Logger LOG = LogManager.getLogger();
+  private static final long MEMORY_LOG_INTERVAL_SECONDS = 60;
 
   // Tickers - RocksDB equivalent of counters
   static final TickerType[] TICKERS = {
@@ -155,6 +159,7 @@ public class RocksDbStats implements AutoCloseable {
   private final Statistics stats;
   private final MetricsSystem metricsSystem;
   private final MetricCategory category;
+  private ScheduledExecutorService memoryLogScheduler;
 
   public RocksDbStats(final MetricsSystem metricsSystem, final MetricCategory category) {
     this.stats = new Statistics();
@@ -187,6 +192,8 @@ public class RocksDbStats implements AutoCloseable {
           () -> ifOpen(() -> stats.getTickerCount(ticker), 0L));
     }
 
+    startMemoryLogging(database);
+
     if (metricsSystem instanceof PrometheusMetricsSystem) {
       for (final HistogramType histogram : HISTOGRAMS) {
         metricsSystem.createSummary(
@@ -198,6 +205,50 @@ public class RocksDbStats implements AutoCloseable {
             "RocksDB histogram for " + histogram.name(),
             () -> provideExternalSummary(histogram));
       }
+    }
+  }
+
+  private void startMemoryLogging(final RocksDB database) {
+    memoryLogScheduler =
+        Executors.newSingleThreadScheduledExecutor(
+            r -> {
+              final Thread t = new Thread(r, "rocksdb-memory-log");
+              t.setDaemon(true);
+              return t;
+            });
+    memoryLogScheduler.scheduleAtFixedRate(
+        () -> logMemoryUsage(database),
+        MEMORY_LOG_INTERVAL_SECONDS,
+        MEMORY_LOG_INTERVAL_SECONDS,
+        TimeUnit.SECONDS);
+  }
+
+  private void logMemoryUsage(final RocksDB database) {
+    if (closed.get()) {
+      return;
+    }
+    try {
+      final long tableReadersMem = database.getLongProperty("rocksdb.estimate-table-readers-mem");
+      final long memTables = database.getLongProperty("rocksdb.cur-size-all-mem-tables");
+      final long blockCacheUsage = database.getLongProperty("rocksdb.block-cache-usage");
+      final long blockCacheCapacity = database.getLongProperty("rocksdb.block-cache-capacity");
+      final long blockCachePinned = database.getLongProperty("rocksdb.block-cache-pinned-usage");
+
+      // tableReaders: index/filter blocks in native memory (should stay near zero with
+      //               setCacheIndexAndFilterBlocks=true since they live in blockCache)
+      // memTables:    write buffer memory (bounded by dbWriteBufferSize, default 128MB)
+      // blockCache:   LRU cache usage vs capacity (includes data, index and filter blocks)
+      // pinned:       pinned L0 index/filter blocks that won't be evicted from cache
+      LOG.info(
+          "RocksDB memory: tableReaders={}MiB, memTables={}MiB, "
+              + "blockCache={}MiB/{}MiB (pinned={}MiB)",
+          tableReadersMem / (1024 * 1024),
+          memTables / (1024 * 1024),
+          blockCacheUsage / (1024 * 1024),
+          blockCacheCapacity / (1024 * 1024),
+          blockCachePinned / (1024 * 1024));
+    } catch (final Exception e) {
+      LOG.debug("Failed to log RocksDB memory usage", e);
     }
   }
 
@@ -235,6 +286,9 @@ public class RocksDbStats implements AutoCloseable {
   @Override
   public void close() {
     if (closed.compareAndSet(false, true)) {
+      if (memoryLogScheduler != null) {
+        memoryLogScheduler.shutdownNow();
+      }
       stats.close();
     }
   }
