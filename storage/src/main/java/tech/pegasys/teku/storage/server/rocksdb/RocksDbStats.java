@@ -208,6 +208,7 @@ public class RocksDbStats implements AutoCloseable {
     }
   }
 
+  @SuppressWarnings("FutureReturnValueIgnored")
   private void startMemoryLogging(final RocksDB database) {
     memoryLogScheduler =
         Executors.newSingleThreadScheduledExecutor(
