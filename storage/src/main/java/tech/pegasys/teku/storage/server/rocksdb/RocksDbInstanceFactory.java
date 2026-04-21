@@ -165,6 +165,10 @@ public class RocksDbInstanceFactory {
             .setKeepLogFileNum(NUMBER_OF_LOG_FILES_TO_KEEP)
             .setEnv(Env.getDefault().setBackgroundThreads(configuration.getBackgroundThreadCount()))
             .setStatistics(stats)
+            // Disable RocksDB's periodic DumpStats() to LOG (default is often 600s). Besu already
+            // exposes Statistics via Prometheus; the native dump path has been a source of JNI SIGSEGVs
+            // on some versions/platforms under load.
+            .setStatsDumpPeriodSec(0)
             .setMaxTotalWalSize(WAL_MAX_TOTAL_SIZE)
             .setRecycleLogFileNum(WAL_MAX_TOTAL_SIZE / EXPECTED_WAL_FILE_SIZE);
 
