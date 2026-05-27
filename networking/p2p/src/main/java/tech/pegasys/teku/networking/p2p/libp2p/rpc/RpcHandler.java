@@ -239,6 +239,14 @@ public class RpcHandler<
     }
 
     @Override
+    public void channelWritabilityChanged(final ChannelHandlerContext ctx) {
+      if (rpcStream instanceof LibP2PRpcStream libP2PRpcStream) {
+        libP2PRpcStream.onWritabilityChanged();
+      }
+      ctx.fireChannelWritabilityChanged();
+    }
+
+    @Override
     public RpcStream getRpcStream() {
       return rpcStream;
     }

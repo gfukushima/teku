@@ -16,8 +16,12 @@ package tech.pegasys.teku.networking.p2p.libp2p.rpc;
 import com.google.common.base.MoreObjects;
 import io.libp2p.core.P2PChannel;
 import io.netty.buffer.ByteBuf;
+import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.EventLoop;
+import java.util.ArrayDeque;
+import java.util.Queue;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.apache.tuweni.bytes.Bytes;
 import tech.pegasys.teku.infrastructure.async.SafeFuture;
@@ -32,6 +36,9 @@ public class LibP2PRpcStream implements RpcStream {
   private final AtomicBoolean writeStreamClosed = new AtomicBoolean(false);
   private final NodeId nodeId;
 
+  // Touched only on the channel's event loop.
+  private final Queue<SafeFuture<Void>> writabilityWaiters = new ArrayDeque<>();
+
   public LibP2PRpcStream(
       final NodeId nodeId, final P2PChannel p2pChannel, final ChannelHandlerContext ctx) {
     this.nodeId = nodeId;
@@ -44,22 +51,79 @@ public class LibP2PRpcStream implements RpcStream {
     if (writeStreamClosed.get()) {
       throw new StreamClosedException();
     }
-    final ByteBuf reqByteBuf = ctx.alloc().buffer();
-    reqByteBuf.writeBytes(bytes.toArrayUnsafe());
+    return awaitWritable()
+        .thenCompose(
+            __ -> {
+              if (writeStreamClosed.get()) {
+                return SafeFuture.failedFuture(new StreamClosedException());
+              }
+              final ByteBuf reqByteBuf = ctx.alloc().buffer();
+              reqByteBuf.writeBytes(bytes.toArrayUnsafe());
+              return toSafeFuture(ctx.writeAndFlush(reqByteBuf));
+            });
+  }
 
-    return toSafeFuture(ctx.writeAndFlush(reqByteBuf));
+  private SafeFuture<Void> awaitWritable() {
+    final Channel channel = ctx.channel();
+    final EventLoop eventLoop = channel.eventLoop();
+    final SafeFuture<Void> waiter = new SafeFuture<>();
+    final Runnable task =
+        () -> {
+          if (writeStreamClosed.get()) {
+            waiter.completeExceptionally(new StreamClosedException());
+          } else if (channel.isWritable()) {
+            waiter.complete(null);
+          } else {
+            writabilityWaiters.add(waiter);
+          }
+        };
+    if (eventLoop.inEventLoop()) {
+      task.run();
+    } else {
+      eventLoop.execute(task);
+    }
+    return waiter;
+  }
+
+  void onWritabilityChanged() {
+    // Invoked from the channel pipeline, always on the event loop.
+    if (!ctx.channel().isWritable()) {
+      return;
+    }
+    SafeFuture<Void> waiter;
+    while ((waiter = writabilityWaiters.poll()) != null) {
+      waiter.complete(null);
+    }
   }
 
   @Override
   public SafeFuture<Void> closeAbruptly() {
     writeStreamClosed.set(true);
+    failPendingWaiters();
     return SafeFuture.of(p2pChannel.close()).thenApply((res) -> null);
   }
 
   @Override
   public SafeFuture<Void> closeWriteStream() {
     writeStreamClosed.set(true);
+    failPendingWaiters();
     return toSafeFuture(ctx.channel().disconnect());
+  }
+
+  private void failPendingWaiters() {
+    final EventLoop eventLoop = ctx.channel().eventLoop();
+    final Runnable task =
+        () -> {
+          SafeFuture<Void> waiter;
+          while ((waiter = writabilityWaiters.poll()) != null) {
+            waiter.completeExceptionally(new StreamClosedException());
+          }
+        };
+    if (eventLoop.inEventLoop()) {
+      task.run();
+    } else {
+      eventLoop.execute(task);
+    }
   }
 
   private SafeFuture<Void> toSafeFuture(final ChannelFuture channelFuture) {
