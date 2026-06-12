@@ -190,11 +190,19 @@ public class RocksDbInstanceFactory {
 
   private static ColumnFamilyOptions createColumnFamilyOptions(
       final KvStoreConfiguration configuration, final Cache cache) {
-    return new ColumnFamilyOptions()
-        .setCompressionType(configuration.getCompressionType())
-        .setBottommostCompressionType(configuration.getBottomMostCompressionType())
-        .setLevelCompactionDynamicLevelBytes(true)
-        .setTableFormatConfig(createBlockBasedTableConfig(cache));
+    final ColumnFamilyOptions options =
+        new ColumnFamilyOptions()
+            .setCompressionType(configuration.getCompressionType())
+            .setBottommostCompressionType(configuration.getBottomMostCompressionType())
+            .setLevelCompactionDynamicLevelBytes(true)
+            .setTableFormatConfig(createBlockBasedTableConfig(cache));
+    // When configured, recompact SSTs older than this period so pruning tombstones in the cold
+    // bottom level are dropped and disk space is reclaimed without waiting for overlap-driven
+    // compaction. 0 leaves RocksDB's built-in default (30 days for leveled compaction) in place.
+    if (configuration.getPeriodicCompactionSeconds() > 0) {
+      options.setPeriodicCompactionSeconds(configuration.getPeriodicCompactionSeconds());
+    }
+    return options;
   }
 
   private static ColumnFamilyDescriptors createColumnFamilyDescriptors(

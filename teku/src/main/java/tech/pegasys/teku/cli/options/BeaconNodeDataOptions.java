@@ -15,6 +15,7 @@ package tech.pegasys.teku.cli.options;
 
 import static tech.pegasys.teku.service.serviceutils.layout.DataConfig.DEFAULT_DEBUG_DATA_DUMPING_ENABLED;
 import static tech.pegasys.teku.storage.server.StorageConfiguration.DEFAULT_ROCKSDB_BLOB_DB_ENABLED;
+import static tech.pegasys.teku.storage.server.StorageConfiguration.DEFAULT_ROCKSDB_PERIODIC_COMPACTION_SECONDS;
 import static tech.pegasys.teku.storage.server.StorageConfiguration.DEFAULT_STATE_REBUILD_TIMEOUT_SECONDS;
 
 import java.nio.file.Path;
@@ -237,6 +238,18 @@ public class BeaconNodeDataOptions extends ValidatorClientDataOptions {
   private boolean rocksdbBlobDbEnabled = DEFAULT_ROCKSDB_BLOB_DB_ENABLED;
 
   @CommandLine.Option(
+      names = {"--Xdata-storage-rocksdb-periodic-compaction-seconds"},
+      hidden = true,
+      paramLabel = "<SECONDS>",
+      showDefaultValue = Visibility.ALWAYS,
+      description =
+          "Seconds after which RocksDB recompacts an SST file regardless of normal compaction "
+              + "pressure. Drops pruning tombstones and reclaims disk space from the cold bottom "
+              + "level. 0 leaves RocksDB's built-in default (30 days for leveled compaction) in place.",
+      arity = "1")
+  private long rocksdbPeriodicCompactionSeconds = DEFAULT_ROCKSDB_PERIODIC_COMPACTION_SECONDS;
+
+  @CommandLine.Option(
       names = {"--force-clear-db"},
       paramLabel = "<BOOLEAN>",
       showDefaultValue = Visibility.ALWAYS,
@@ -277,7 +290,8 @@ public class BeaconNodeDataOptions extends ValidatorClientDataOptions {
                 .statePruningInterval(Duration.ofSeconds(statePruningIntervalSeconds))
                 .statePruningLimit(statePruningLimit)
                 .forceClearDb(forceClearDb)
-                .rocksdbBlobDbEnabled(rocksdbBlobDbEnabled));
+                .rocksdbBlobDbEnabled(rocksdbBlobDbEnabled)
+                .rocksdbPeriodicCompactionSeconds(rocksdbPeriodicCompactionSeconds));
     builder.sync(
         b ->
             b.fetchAllHistoricBlocks(dataStorageMode.storesAllBlocks())

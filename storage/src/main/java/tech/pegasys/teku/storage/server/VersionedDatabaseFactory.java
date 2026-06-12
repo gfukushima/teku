@@ -68,6 +68,7 @@ public class VersionedDatabaseFactory implements DatabaseFactory {
   private final Spec spec;
   private final boolean storeNonCanonicalBlocks;
   private final boolean rocksdbBlobDbEnabled;
+  private final long rocksdbPeriodicCompactionSeconds;
   private final SyncDataAccessor dbSettingFileSyncDataAccessor;
   private final Optional<Eth2Network> maybeNetwork;
 
@@ -87,6 +88,7 @@ public class VersionedDatabaseFactory implements DatabaseFactory {
     this.eth1Address = config.getEth1DepositContract();
     this.storeNonCanonicalBlocks = config.isStoreNonCanonicalBlocksEnabled();
     this.rocksdbBlobDbEnabled = config.isRocksdbBlobDbEnabled();
+    this.rocksdbPeriodicCompactionSeconds = config.getRocksdbPeriodicCompactionSeconds();
     this.spec = config.getSpec();
 
     this.dbDirectory = this.dataDirectory.toPath().resolve(DB_PATH).toFile();
@@ -197,9 +199,11 @@ public class VersionedDatabaseFactory implements DatabaseFactory {
       return RocksDbDatabaseFactory.createV4(
           metricsSystem,
           KvStoreConfiguration.v4Settings(dbDirectory.toPath())
-              .withBlobDbEnabled(rocksdbBlobDbEnabled),
+              .withBlobDbEnabled(rocksdbBlobDbEnabled)
+              .withPeriodicCompactionSeconds(rocksdbPeriodicCompactionSeconds),
           KvStoreConfiguration.v4Settings(v5ArchiveDirectory.toPath())
-              .withBlobDbEnabled(rocksdbBlobDbEnabled),
+              .withBlobDbEnabled(rocksdbBlobDbEnabled)
+              .withPeriodicCompactionSeconds(rocksdbPeriodicCompactionSeconds),
           stateStorageMode,
           stateStorageFrequency,
           storeNonCanonicalBlocks,
@@ -229,11 +233,13 @@ public class VersionedDatabaseFactory implements DatabaseFactory {
           metaData
               .getHotDbConfiguration()
               .withDatabaseDir(dbDirectory.toPath())
-              .withBlobDbEnabled(rocksdbBlobDbEnabled),
+              .withBlobDbEnabled(rocksdbBlobDbEnabled)
+              .withPeriodicCompactionSeconds(rocksdbPeriodicCompactionSeconds),
           metaData
               .getArchiveDbConfiguration()
               .withDatabaseDir(v5ArchiveDirectory.toPath())
-              .withBlobDbEnabled(rocksdbBlobDbEnabled),
+              .withBlobDbEnabled(rocksdbBlobDbEnabled)
+              .withPeriodicCompactionSeconds(rocksdbPeriodicCompactionSeconds),
           stateStorageMode,
           stateStorageFrequency,
           storeNonCanonicalBlocks,
@@ -336,7 +342,8 @@ public class VersionedDatabaseFactory implements DatabaseFactory {
     return metaData
         .getSingleDbConfiguration()
         .getConfiguration()
-        .withBlobDbEnabled(rocksdbBlobDbEnabled);
+        .withBlobDbEnabled(rocksdbBlobDbEnabled)
+        .withPeriodicCompactionSeconds(rocksdbPeriodicCompactionSeconds);
   }
 
   private File getMetadataFile() {

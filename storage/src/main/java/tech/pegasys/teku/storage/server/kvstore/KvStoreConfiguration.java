@@ -56,6 +56,14 @@ public class KvStoreConfiguration {
   private static final boolean DEFAULT_OPTIMISE_FOR_SMALL_DB = false;
   private static final boolean DEFAULT_BLOBDB_ENABLED = false;
 
+  /**
+   * Number of seconds after which RocksDB recompacts an SST regardless of normal compaction
+   * pressure, dropping the deletion tombstones left by pruning and reclaiming disk space from the
+   * cold bottom level. {@code 0} leaves RocksDB's own default (30 days for leveled compaction)
+   * untouched.
+   */
+  public static final long DEFAULT_PERIODIC_COMPACTION_SECONDS = 0;
+
   /** RocksDb number of log files to keep on disk */
   public static final long NUMBER_OF_LOG_FILES_TO_KEEP = 5;
 
@@ -103,6 +111,9 @@ public class KvStoreConfiguration {
   @JsonProperty(value = "blobDbEnabled", access = Access.WRITE_ONLY)
   private boolean blobDbEnabled = DEFAULT_BLOBDB_ENABLED;
 
+  @JsonProperty(value = "periodicCompactionSeconds", access = Access.WRITE_ONLY)
+  private long periodicCompactionSeconds = DEFAULT_PERIODIC_COMPACTION_SECONDS;
+
   /* ---------------     Fixed Properties     ------------ */
 
   @JsonProperty("compressionType")
@@ -138,6 +149,11 @@ public class KvStoreConfiguration {
 
   public KvStoreConfiguration withBlobDbEnabled(final boolean blobDbEnabled) {
     this.blobDbEnabled = blobDbEnabled;
+    return this;
+  }
+
+  public KvStoreConfiguration withPeriodicCompactionSeconds(final long periodicCompactionSeconds) {
+    this.periodicCompactionSeconds = periodicCompactionSeconds;
     return this;
   }
 
@@ -193,6 +209,10 @@ public class KvStoreConfiguration {
     return blobDbEnabled;
   }
 
+  public long getPeriodicCompactionSeconds() {
+    return periodicCompactionSeconds;
+  }
+
   @Override
   public String toString() {
     return MoreObjects.toStringHelper(this)
@@ -205,6 +225,7 @@ public class KvStoreConfiguration {
         .add("bottomMostCompressionType", bottomMostCompressionType)
         .add("databaseDir", databaseDir)
         .add("blobDbEnabled", blobDbEnabled)
+        .add("periodicCompactionSeconds", periodicCompactionSeconds)
         .toString();
   }
 }

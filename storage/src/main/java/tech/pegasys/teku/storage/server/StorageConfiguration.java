@@ -34,6 +34,8 @@ import tech.pegasys.teku.spec.Spec;
 public class StorageConfiguration {
   public static final boolean DEFAULT_STORE_NON_CANONICAL_BLOCKS_ENABLED = false;
   public static final boolean DEFAULT_ROCKSDB_BLOB_DB_ENABLED = false;
+  // 0 keeps RocksDB's built-in default (30 days for leveled compaction).
+  public static final long DEFAULT_ROCKSDB_PERIODIC_COMPACTION_SECONDS = 0;
   public static final int DEFAULT_STATE_REBUILD_TIMEOUT_SECONDS = 120;
   public static final long DEFAULT_STORAGE_FREQUENCY = 2048L;
   public static final int DEFAULT_MAX_KNOWN_NODE_CACHE_SIZE = 100_000;
@@ -76,6 +78,7 @@ public class StorageConfiguration {
   private final int stateRebuildTimeoutSeconds;
   private final boolean forceClearDb;
   private final boolean rocksdbBlobDbEnabled;
+  private final long rocksdbPeriodicCompactionSeconds;
 
   private StorageConfiguration(
       final Eth1Address eth1DepositContract,
@@ -97,7 +100,8 @@ public class StorageConfiguration {
       final int statePruningLimit,
       final Spec spec,
       final boolean forceClearDb,
-      final boolean rocksdbBlobDbEnabled) {
+      final boolean rocksdbBlobDbEnabled,
+      final long rocksdbPeriodicCompactionSeconds) {
     this.eth1DepositContract = eth1DepositContract;
     this.dataStorageMode = dataStorageMode;
     this.dataStorageFrequency = dataStorageFrequency;
@@ -118,6 +122,7 @@ public class StorageConfiguration {
     this.spec = spec;
     this.forceClearDb = forceClearDb;
     this.rocksdbBlobDbEnabled = rocksdbBlobDbEnabled;
+    this.rocksdbPeriodicCompactionSeconds = rocksdbPeriodicCompactionSeconds;
   }
 
   public static Builder builder() {
@@ -204,6 +209,10 @@ public class StorageConfiguration {
     return rocksdbBlobDbEnabled;
   }
 
+  public long getRocksdbPeriodicCompactionSeconds() {
+    return rocksdbPeriodicCompactionSeconds;
+  }
+
   public static final class Builder {
     private static final Logger LOG = LogManager.getLogger();
     private Eth1Address eth1DepositContract;
@@ -227,6 +236,7 @@ public class StorageConfiguration {
     private int statePruningLimit = DEFAULT_STATE_PRUNING_LIMIT;
     private boolean forceClearDb = false;
     private boolean rocksdbBlobDbEnabled = DEFAULT_ROCKSDB_BLOB_DB_ENABLED;
+    private long rocksdbPeriodicCompactionSeconds = DEFAULT_ROCKSDB_PERIODIC_COMPACTION_SECONDS;
 
     private Builder() {}
 
@@ -390,6 +400,11 @@ public class StorageConfiguration {
       return this;
     }
 
+    public Builder rocksdbPeriodicCompactionSeconds(final long rocksdbPeriodicCompactionSeconds) {
+      this.rocksdbPeriodicCompactionSeconds = rocksdbPeriodicCompactionSeconds;
+      return this;
+    }
+
     public StorageConfiguration build() {
       determineDataStorageMode();
       validateStatePruningConfiguration();
@@ -413,7 +428,8 @@ public class StorageConfiguration {
           statePruningLimit,
           spec,
           forceClearDb,
-          rocksdbBlobDbEnabled);
+          rocksdbBlobDbEnabled,
+          rocksdbPeriodicCompactionSeconds);
     }
 
     private void determineDataStorageMode() {
