@@ -27,6 +27,7 @@ import tech.pegasys.teku.spec.datastructures.state.beaconstate.versions.gloas.Be
 import tech.pegasys.teku.spec.logic.versions.gloas.helpers.BeaconStateAccessorsGloas;
 import tech.pegasys.teku.spec.logic.versions.gloas.helpers.PredicatesGloas;
 import tech.pegasys.teku.statetransition.validation.ExecutionPayloadBidGossipValidator;
+import tech.pegasys.teku.storage.client.RecentChainData;
 
 public class BuilderBidValidator {
 
@@ -34,11 +35,15 @@ public class BuilderBidValidator {
 
   private final Spec spec;
   private final ProposerPreferencesManager proposerPreferencesManager;
+  private final RecentChainData recentChainData;
 
   public BuilderBidValidator(
-      final Spec spec, final ProposerPreferencesManager proposerPreferencesManager) {
+      final Spec spec,
+      final ProposerPreferencesManager proposerPreferencesManager,
+      final RecentChainData recentChainData) {
     this.spec = spec;
     this.proposerPreferencesManager = proposerPreferencesManager;
+    this.recentChainData = recentChainData;
   }
 
   /**
@@ -95,11 +100,20 @@ public class BuilderBidValidator {
         proposerPreferencesManager.getProposerPreferences(slot);
 
     if (proposerPreferences.isPresent()) {
-      if (bid.getFeeRecipient().equals(proposerPreferences.get().getFeeRecipient())) {
+      if (!bid.getFeeRecipient().equals(proposerPreferences.get().getFeeRecipient())) {
         LOG.warn("Bid rejected: fee recipient mismatch");
         return false;
       }
-      final UInt64 parentGasLimit = stateGloas.getLatestExecutionPayloadBid().getGasLimit();
+      final UInt64 parentGasLimit =
+          recentChainData
+              .getExecutionGasLimitForBlockRootAndHash(
+                  bid.getParentBlockRoot(), bid.getParentBlockHash())
+              .orElseThrow(
+                  () ->
+                      new IllegalStateException(
+                          String.format(
+                              "Parent gas limit for block root %s and hash %s is not available",
+                              bid.getParentBlockRoot(), bid.getParentBlockHash())));
       if (!ExecutionPayloadBidGossipValidator.isGasLimitTargetCompatible(
           parentGasLimit, bid.getGasLimit(), proposerPreferences.get().getTargetGasLimit())) {
         LOG.warn("Bid rejected: gas limit {} is not compatible with target", bid.getGasLimit());
