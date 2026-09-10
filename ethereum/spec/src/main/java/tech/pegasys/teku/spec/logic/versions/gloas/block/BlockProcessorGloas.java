@@ -292,7 +292,7 @@ public class BlockProcessorGloas extends BlockProcessorFulu {
         throw new BlockProcessingException("Builder doesn't have funds to cover the bid");
       }
       if (!operationSignatureVerifier.verifyExecutionPayloadBidSignature(
-          state, signedBid, specConfigGloas.getBLSSignatureVerifier())) {
+          state, signedBid, specConfig.getBLSSignatureVerifier())) {
         throw new BlockProcessingException("Signature for the signed bind was invalid");
       }
     }
