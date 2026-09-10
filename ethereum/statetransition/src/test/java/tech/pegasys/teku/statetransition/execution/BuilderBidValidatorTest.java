@@ -42,6 +42,7 @@ import tech.pegasys.teku.spec.datastructures.state.versions.gloas.Builder;
 import tech.pegasys.teku.spec.logic.versions.gloas.helpers.BeaconStateAccessorsGloas;
 import tech.pegasys.teku.spec.schemas.SchemaDefinitionsGloas;
 import tech.pegasys.teku.spec.util.DataStructureUtil;
+import tech.pegasys.teku.storage.client.RecentChainData;
 
 public class BuilderBidValidatorTest {
 
@@ -55,8 +56,9 @@ public class BuilderBidValidatorTest {
   private final DataStructureUtil dataStructureUtil = new DataStructureUtil(spec);
   private final ProposerPreferencesManager proposerPreferencesManager =
       mock(ProposerPreferencesManager.class);
+  private final RecentChainData recentChainData = mock(RecentChainData.class);
   private final BuilderBidValidator validator =
-      new BuilderBidValidator(spec, proposerPreferencesManager);
+      new BuilderBidValidator(spec, proposerPreferencesManager, recentChainData);
 
   private BeaconStateGloas state;
   private Bytes32 validParentBlockHash;
@@ -71,13 +73,17 @@ public class BuilderBidValidatorTest {
         createStateWithActiveBuilder(spec.getGenesisSpec().getConfig().getMaxEffectiveBalance());
 
     final BeaconStateGloas stateGloas = BeaconStateGloas.required(state);
-    final BeaconStateAccessorsGloas accessors =
+    final BeaconStateAccessorsGloas beaconStateAccessors =
         BeaconStateAccessorsGloas.required(spec.atSlot(state.getSlot()).beaconStateAccessors());
 
     validParentBlockHash = stateGloas.getLatestExecutionPayloadBid().getBlockHash();
     validParentBlockRoot = state.getLatestBlockHeader().hashTreeRoot();
-    validPrevRandao = accessors.getRandaoMix(state, accessors.getCurrentEpoch(state));
+    validPrevRandao =
+        beaconStateAccessors.getRandaoMix(state, beaconStateAccessors.getCurrentEpoch(state));
     validGasLimit = stateGloas.getLatestExecutionPayloadBid().getGasLimit();
+
+    when(recentChainData.getExecutionGasLimitForBlockRootAndHash(any(), any()))
+        .thenReturn(Optional.of(validGasLimit));
   }
 
   @Test
@@ -178,13 +184,12 @@ public class BuilderBidValidatorTest {
   }
 
   @Test
-  void rejectsWhenFeeRecipientMatchesProposerPreferences() {
-    // Note: the current implementation rejects when fee recipient MATCHES the proposer's
-    // preference.
-    // The spec requires rejection when they do NOT match — this condition is inverted.
+  void rejectsWhenFeeRecipientDoesNotMatchProposerPreferences() {
     final Eth1Address feeRecipient = dataStructureUtil.randomEth1Address();
     when(proposerPreferencesManager.getProposerPreferences(state.getSlot()))
-        .thenReturn(Optional.of(createProposerPreferences(feeRecipient, validGasLimit)));
+        .thenReturn(
+            Optional.of(
+                createProposerPreferences(dataStructureUtil.randomEth1Address(), validGasLimit)));
 
     final SignedExecutionPayloadBid bid =
         signedBidWith(
@@ -201,7 +206,6 @@ public class BuilderBidValidatorTest {
 
   @Test
   void rejectsIfGasLimitNotCompatibleWithProposerPreferences() {
-    // Use a different fee recipient in the bid so the (currently inverted) fee check passes
     final Eth1Address bidFeeRecipient = dataStructureUtil.randomEth1Address();
     final Eth1Address preferencesFeeRecipient = dataStructureUtil.randomEth1Address();
     // Target gas limit far out of the compatible range forces a specific adjusted value

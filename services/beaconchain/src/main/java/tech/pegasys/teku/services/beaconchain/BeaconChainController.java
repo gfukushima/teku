@@ -1029,7 +1029,7 @@ public class BeaconChainController extends Service implements BeaconChainControl
       final StakedBuilderClientProvider stakedBuilderClientProvider =
           new StakedBuilderClientProvider(spec, beaconAsyncRunner);
       final BuilderBidValidator bidValidator =
-          new BuilderBidValidator(spec, proposerPreferencesManager);
+          new BuilderBidValidator(spec, proposerPreferencesManager, recentChainData);
       final BuilderBidFetcher builderBidFetcher =
           new BuilderBidFetcher(spec, stakedBuilderClientProvider, bidValidator);
       final ExecutionPayloadBidSelector executionPayloadBidSelector =
