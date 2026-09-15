@@ -65,10 +65,10 @@ public class BuilderBidValidatorTest {
   private Bytes32 validParentBlockRoot;
   private Bytes32 validPrevRandao;
   private UInt64 validGasLimit;
+  private Eth1Address validFeeRecipient;
 
   @BeforeEach
   void setUp() {
-    when(proposerPreferencesManager.getProposerPreferences(any())).thenReturn(Optional.empty());
     state =
         createStateWithActiveBuilder(spec.getGenesisSpec().getConfig().getMaxEffectiveBalance());
 
@@ -81,14 +81,17 @@ public class BuilderBidValidatorTest {
     validPrevRandao =
         beaconStateAccessors.getRandaoMix(state, beaconStateAccessors.getCurrentEpoch(state));
     validGasLimit = stateGloas.getLatestExecutionPayloadBid().getGasLimit();
+    validFeeRecipient = dataStructureUtil.randomEth1Address();
 
     when(recentChainData.getExecutionGasLimitForBlockRootAndHash(any(), any()))
         .thenReturn(Optional.of(validGasLimit));
+    when(proposerPreferencesManager.getProposerPreferences(any()))
+        .thenReturn(Optional.of(createProposerPreferences(validFeeRecipient, validGasLimit)));
   }
 
   @Test
   void returnsTrueForValidBid() {
-    assertThat(validator.validateBid(validSignedBid(), state)).isTrue();
+    assertThat(validate(validSignedBid(), state)).isTrue();
   }
 
   @Test
@@ -103,8 +106,8 @@ public class BuilderBidValidatorTest {
             validParentBlockRoot,
             validPrevRandao,
             validGasLimit,
-            dataStructureUtil.randomEth1Address());
-    assertThat(validator.validateBid(bid, state)).isFalse();
+            validFeeRecipient);
+    assertThat(validate(bid, state)).isFalse();
   }
 
   @Test
@@ -118,8 +121,8 @@ public class BuilderBidValidatorTest {
             validParentBlockRoot,
             validPrevRandao,
             validGasLimit,
-            dataStructureUtil.randomEth1Address());
-    assertThat(validator.validateBid(bid, state)).isFalse();
+            validFeeRecipient);
+    assertThat(validate(bid, state)).isFalse();
   }
 
   @Test
@@ -133,8 +136,8 @@ public class BuilderBidValidatorTest {
             validParentBlockRoot,
             validPrevRandao,
             validGasLimit,
-            dataStructureUtil.randomEth1Address());
-    assertThat(validator.validateBid(bid, state)).isFalse();
+            validFeeRecipient);
+    assertThat(validate(bid, state)).isFalse();
   }
 
   @Test
@@ -149,8 +152,35 @@ public class BuilderBidValidatorTest {
             validParentBlockRoot,
             validPrevRandao,
             validGasLimit,
-            dataStructureUtil.randomEth1Address());
-    assertThat(validator.validateBid(bid, state)).isTrue();
+            validFeeRecipient);
+    assertThat(validate(bid, state)).isTrue();
+  }
+
+  @Test
+  void rejectsBidExtendingAParentOtherThanTheOneBeingBuiltOn() {
+    // The bid extends the EMPTY variant, which the spec permits in isolation, but the block is
+    // being built on the FULL variant
+    final Bytes32 latestBlockHash = BeaconStateGloas.required(state).getLatestBlockHash();
+    final SignedExecutionPayloadBid bid =
+        signedBidWith(
+            BUILDER_INDEX,
+            state.getSlot(),
+            UInt64.ZERO,
+            latestBlockHash,
+            validParentBlockRoot,
+            validPrevRandao,
+            validGasLimit,
+            validFeeRecipient);
+    assertThat(validator.validateBid(bid, state, validParentBlockHash, validParentBlockRoot))
+        .isFalse();
+  }
+
+  @Test
+  void rejectsBidWhoseParentBlockRootIsNotTheOneBeingBuiltOn() {
+    assertThat(
+            validator.validateBid(
+                validSignedBid(), state, validParentBlockHash, dataStructureUtil.randomBytes32()))
+        .isFalse();
   }
 
   @Test
@@ -164,8 +194,8 @@ public class BuilderBidValidatorTest {
             dataStructureUtil.randomBytes32(),
             validPrevRandao,
             validGasLimit,
-            dataStructureUtil.randomEth1Address());
-    assertThat(validator.validateBid(bid, state)).isFalse();
+            validFeeRecipient);
+    assertThat(validate(bid, state)).isFalse();
   }
 
   @Test
@@ -179,8 +209,8 @@ public class BuilderBidValidatorTest {
             validParentBlockRoot,
             dataStructureUtil.randomBytes32(),
             validGasLimit,
-            dataStructureUtil.randomEth1Address());
-    assertThat(validator.validateBid(bid, state)).isFalse();
+            validFeeRecipient);
+    assertThat(validate(bid, state)).isFalse();
   }
 
   @Test
@@ -201,19 +231,17 @@ public class BuilderBidValidatorTest {
             validPrevRandao,
             validGasLimit,
             feeRecipient);
-    assertThat(validator.validateBid(bid, state)).isFalse();
+    assertThat(validate(bid, state)).isFalse();
   }
 
   @Test
   void rejectsIfGasLimitNotCompatibleWithProposerPreferences() {
-    final Eth1Address bidFeeRecipient = dataStructureUtil.randomEth1Address();
-    final Eth1Address preferencesFeeRecipient = dataStructureUtil.randomEth1Address();
+    // Same fee recipient as the preferences, so the bid reaches the gas limit check
     // Target gas limit far out of the compatible range forces a specific adjusted value
     final UInt64 incompatibleTargetGasLimit = validGasLimit.plus(1_000_000);
     when(proposerPreferencesManager.getProposerPreferences(state.getSlot()))
         .thenReturn(
-            Optional.of(
-                createProposerPreferences(preferencesFeeRecipient, incompatibleTargetGasLimit)));
+            Optional.of(createProposerPreferences(validFeeRecipient, incompatibleTargetGasLimit)));
 
     // Bid gas limit equals the parent gas limit but the required value (capped at max) differs
     final SignedExecutionPayloadBid bid =
@@ -225,8 +253,15 @@ public class BuilderBidValidatorTest {
             validParentBlockRoot,
             validPrevRandao,
             validGasLimit,
-            bidFeeRecipient);
-    assertThat(validator.validateBid(bid, state)).isFalse();
+            validFeeRecipient);
+    assertThat(validate(bid, state)).isFalse();
+  }
+
+  @Test
+  void rejectsWhenParentGasLimitIsUnavailable() {
+    when(recentChainData.getExecutionGasLimitForBlockRootAndHash(any(), any()))
+        .thenReturn(Optional.empty());
+    assertThat(validate(validSignedBid(), state)).isFalse();
   }
 
   @Test
@@ -247,15 +282,27 @@ public class BuilderBidValidatorTest {
             lowBalanceState.getLatestBlockHeader().hashTreeRoot(),
             beaconStateAccessors.getRandaoMix(
                 lowBalanceState, beaconStateAccessors.getCurrentEpoch(lowBalanceState)),
-            stateGloas.getLatestExecutionPayloadBid().getGasLimit(),
-            dataStructureUtil.randomEth1Address());
-    assertThat(validator.validateBid(bid, lowBalanceState)).isFalse();
+            // matches the stubbed parent gas limit and the preferences target, so the bid reaches
+            // the collateral check
+            validGasLimit,
+            validFeeRecipient);
+    assertThat(validate(bid, lowBalanceState)).isFalse();
   }
 
   @Test
-  void skipsFeeAndGasLimitChecksWhenProposerPreferencesAbsent() {
+  void rejectsWhenProposerPreferencesAbsent() {
     when(proposerPreferencesManager.getProposerPreferences(any())).thenReturn(Optional.empty());
-    assertThat(validator.validateBid(validSignedBid(), state)).isTrue();
+    assertThat(validate(validSignedBid(), state)).isFalse();
+  }
+
+  /**
+   * Validates the bid against the parent it was built on, so that each test exercises the check it
+   * targets. The bids that do not extend the parent being built on are covered separately.
+   */
+  private boolean validate(final SignedExecutionPayloadBid signedBid, final BeaconState state) {
+    final ExecutionPayloadBid bid = signedBid.getMessage();
+    return validator.validateBid(
+        signedBid, state, bid.getParentBlockHash(), bid.getParentBlockRoot());
   }
 
   private SignedExecutionPayloadBid validSignedBid() {
@@ -267,7 +314,7 @@ public class BuilderBidValidatorTest {
         validParentBlockRoot,
         validPrevRandao,
         validGasLimit,
-        dataStructureUtil.randomEth1Address());
+        validFeeRecipient);
   }
 
   private SignedExecutionPayloadBid signedBidWith(

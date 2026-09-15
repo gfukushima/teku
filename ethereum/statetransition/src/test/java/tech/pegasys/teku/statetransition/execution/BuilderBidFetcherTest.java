@@ -50,7 +50,7 @@ public class BuilderBidFetcherTest {
 
   @BeforeEach
   void setUp() {
-    when(bidValidator.validateBid(any(), any())).thenReturn(true);
+    when(bidValidator.validateBid(any(), any(), any(), any())).thenReturn(true);
   }
 
   @Test
@@ -108,7 +108,7 @@ public class BuilderBidFetcherTest {
     when(builderClient.getExecutionPayloadBid(any(), any(), any(), any(), any()))
         .thenReturn(SafeFuture.completedFuture(Optional.of(validBid)))
         .thenReturn(SafeFuture.completedFuture(Optional.of(invalidBid)));
-    when(bidValidator.validateBid(eq(invalidBid), any())).thenReturn(false);
+    when(bidValidator.validateBid(eq(invalidBid), any(), any(), any())).thenReturn(false);
 
     final List<RemoteBid> result =
         SafeFutureAssert.safeJoin(
