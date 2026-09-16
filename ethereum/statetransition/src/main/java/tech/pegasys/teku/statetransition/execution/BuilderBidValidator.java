@@ -13,6 +13,8 @@
 
 package tech.pegasys.teku.statetransition.execution;
 
+import static tech.pegasys.teku.spec.config.SpecConfigGloas.PAYLOAD_BUILDER_VERSION;
+
 import java.util.Optional;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -25,9 +27,11 @@ import tech.pegasys.teku.spec.datastructures.epbs.versions.gloas.ProposerPrefere
 import tech.pegasys.teku.spec.datastructures.epbs.versions.gloas.SignedExecutionPayloadBid;
 import tech.pegasys.teku.spec.datastructures.state.beaconstate.BeaconState;
 import tech.pegasys.teku.spec.datastructures.state.beaconstate.versions.gloas.BeaconStateGloas;
+import tech.pegasys.teku.spec.datastructures.state.versions.gloas.Builder;
 import tech.pegasys.teku.spec.logic.versions.gloas.helpers.BeaconStateAccessorsGloas;
 import tech.pegasys.teku.spec.logic.versions.gloas.helpers.PredicatesGloas;
 import tech.pegasys.teku.statetransition.validation.ExecutionPayloadBidGossipValidator;
+import tech.pegasys.teku.statetransition.validation.GossipValidationHelper;
 import tech.pegasys.teku.storage.client.RecentChainData;
 
 public class BuilderBidValidator {
@@ -37,14 +41,17 @@ public class BuilderBidValidator {
   private final Spec spec;
   private final ProposerPreferencesManager proposerPreferencesManager;
   private final RecentChainData recentChainData;
+  private final GossipValidationHelper gossipValidationHelper;
 
   public BuilderBidValidator(
       final Spec spec,
       final ProposerPreferencesManager proposerPreferencesManager,
-      final RecentChainData recentChainData) {
+      final RecentChainData recentChainData,
+      final GossipValidationHelper gossipValidationHelper) {
     this.spec = spec;
     this.proposerPreferencesManager = proposerPreferencesManager;
     this.recentChainData = recentChainData;
+    this.gossipValidationHelper = gossipValidationHelper;
   }
 
   /**
@@ -81,6 +88,37 @@ public class BuilderBidValidator {
 
     if (!slot.equals(state.getSlot())) {
       LOG.warn("Bid rejected: bid slot {} does not match state slot {}", slot, state.getSlot());
+      return false;
+    }
+
+    /*
+     * The three checks below are not part of validate_bid, but are enforced by
+     * process_execution_payload_bid and by gossip validation. Bids coming from the Builder API
+     * never go through gossip validation, so check them here rather than discovering the problem
+     * when our own block fails to process.
+     */
+    final Builder builder = stateGloas.getBuilders().get(bid.getBuilderIndex().intValue());
+    if (builder.getVersion() != PAYLOAD_BUILDER_VERSION) {
+      LOG.warn(
+          "Bid rejected: builder {} has version {} but only payload builder version {} may bid",
+          bid.getBuilderIndex(),
+          builder.getVersion(),
+          PAYLOAD_BUILDER_VERSION);
+      return false;
+    }
+
+    if (bid.getBlockHash().equals(bid.getParentBlockHash())) {
+      LOG.warn("Bid rejected: block hash and parent block hash are the same");
+      return false;
+    }
+
+    final Optional<Integer> maybeMaxBlobsPerBlock = spec.getMaxBlobsPerBlockAtSlot(slot);
+    if (maybeMaxBlobsPerBlock.isPresent()
+        && bid.getBlobKzgCommitments().size() > maybeMaxBlobsPerBlock.get()) {
+      LOG.warn(
+          "Bid rejected: has {} blob kzg commitments which exceeds the maximum of {} for the slot",
+          bid.getBlobKzgCommitments().size(),
+          maybeMaxBlobsPerBlock.get());
       return false;
     }
 
@@ -126,8 +164,17 @@ public class BuilderBidValidator {
      * proposal slot means they were never submitted, in which case accepting the bid would let a
      * builder choose the fee recipient.
      */
+    final Optional<Bytes32> maybeDependentRoot =
+        gossipValidationHelper.getShufflingDependentRoot(bid.getParentBlockRoot(), slot);
+    if (maybeDependentRoot.isEmpty()) {
+      LOG.warn(
+          "Bid rejected: shuffling dependent root is unavailable for parent block root {}",
+          bid.getParentBlockRoot());
+      return false;
+    }
+
     final Optional<ProposerPreferences> maybeProposerPreferences =
-        proposerPreferencesManager.getProposerPreferences(slot);
+        proposerPreferencesManager.getProposerPreferences(slot, maybeDependentRoot.get());
     if (maybeProposerPreferences.isEmpty()) {
       LOG.warn("Bid rejected: no proposer preferences available for slot {}", slot);
       return false;

@@ -171,6 +171,39 @@ public class ExecutionPayloadBidSelectorTest {
   }
 
   @Test
+  void selectBestRemoteBidFiltersBuilderBidsBelowMinBid() {
+    final UInt64 slot = UInt64.valueOf(10);
+    final Bytes32 parentRoot = dataStructureUtil.randomBytes32();
+    final Bytes32 parentBlockHash = dataStructureUtil.randomBytes32();
+    final UInt64 minBid = UInt64.valueOf(100);
+    final BuilderConfig builderConfig =
+        BUILDER_CONFIG_SCHEMA.create(minBid, UInt64.valueOf(100), List.of());
+    final SignedExecutionPayloadBid belowMinBid =
+        createBid(slot, parentRoot, parentBlockHash, minBid.minus(1));
+    final SignedExecutionPayloadBid atMinBid = createBid(slot, parentRoot, parentBlockHash, minBid);
+    when(circuitBreaker.isBuilderAllowed(any(), any())).thenReturn(true);
+
+    assertThat(
+            selector.selectBestRemoteBid(
+                Set.of(),
+                List.of(toRemoteBid(belowMinBid)),
+                parentRoot,
+                parentBlockHash,
+                state,
+                builderConfig))
+        .isEmpty();
+    assertThat(
+            selector.selectBestRemoteBid(
+                Set.of(),
+                List.of(toRemoteBid(atMinBid)),
+                parentRoot,
+                parentBlockHash,
+                state,
+                builderConfig))
+        .contains(toRemoteBid(atMinBid));
+  }
+
+  @Test
   void selectBestRemoteBidPrefersBuilderBidOnEqualValue() {
     final UInt64 slot = UInt64.valueOf(10);
     final Bytes32 parentRoot = dataStructureUtil.randomBytes32();

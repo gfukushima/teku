@@ -18,9 +18,11 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static tech.pegasys.teku.spec.config.SpecConfig.FAR_FUTURE_EPOCH;
+import static tech.pegasys.teku.spec.config.SpecConfigGloas.PAYLOAD_BUILDER_VERSION;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.stream.IntStream;
 import org.apache.tuweni.bytes.Bytes32;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -42,12 +44,14 @@ import tech.pegasys.teku.spec.datastructures.state.versions.gloas.Builder;
 import tech.pegasys.teku.spec.logic.versions.gloas.helpers.BeaconStateAccessorsGloas;
 import tech.pegasys.teku.spec.schemas.SchemaDefinitionsGloas;
 import tech.pegasys.teku.spec.util.DataStructureUtil;
+import tech.pegasys.teku.statetransition.validation.GossipValidationHelper;
 import tech.pegasys.teku.storage.client.RecentChainData;
 
 public class BuilderBidValidatorTest {
 
   private static final UInt64 FINALIZED_EPOCH = UInt64.valueOf(5);
   private static final UInt64 BUILDER_INDEX = UInt64.ZERO;
+  private static final Bytes32 DEPENDENT_ROOT = Bytes32.fromHexString("0x1234");
 
   // NOOP verifier so random signatures pass — lets tests focus on the other validation rules
   private final Spec spec =
@@ -57,8 +61,10 @@ public class BuilderBidValidatorTest {
   private final ProposerPreferencesManager proposerPreferencesManager =
       mock(ProposerPreferencesManager.class);
   private final RecentChainData recentChainData = mock(RecentChainData.class);
+  private final GossipValidationHelper gossipValidationHelper = mock(GossipValidationHelper.class);
   private final BuilderBidValidator validator =
-      new BuilderBidValidator(spec, proposerPreferencesManager, recentChainData);
+      new BuilderBidValidator(
+          spec, proposerPreferencesManager, recentChainData, gossipValidationHelper);
 
   private BeaconStateGloas state;
   private Bytes32 validParentBlockHash;
@@ -85,7 +91,9 @@ public class BuilderBidValidatorTest {
 
     when(recentChainData.getExecutionGasLimitForBlockRootAndHash(any(), any()))
         .thenReturn(Optional.of(validGasLimit));
-    when(proposerPreferencesManager.getProposerPreferences(any()))
+    when(gossipValidationHelper.getShufflingDependentRoot(any(), any()))
+        .thenReturn(Optional.of(DEPENDENT_ROOT));
+    when(proposerPreferencesManager.getProposerPreferences(any(), any()))
         .thenReturn(Optional.of(createProposerPreferences(validFeeRecipient, validGasLimit)));
   }
 
@@ -216,7 +224,7 @@ public class BuilderBidValidatorTest {
   @Test
   void rejectsWhenFeeRecipientDoesNotMatchProposerPreferences() {
     final Eth1Address feeRecipient = dataStructureUtil.randomEth1Address();
-    when(proposerPreferencesManager.getProposerPreferences(state.getSlot()))
+    when(proposerPreferencesManager.getProposerPreferences(state.getSlot(), DEPENDENT_ROOT))
         .thenReturn(
             Optional.of(
                 createProposerPreferences(dataStructureUtil.randomEth1Address(), validGasLimit)));
@@ -239,7 +247,7 @@ public class BuilderBidValidatorTest {
     // Same fee recipient as the preferences, so the bid reaches the gas limit check
     // Target gas limit far out of the compatible range forces a specific adjusted value
     final UInt64 incompatibleTargetGasLimit = validGasLimit.plus(1_000_000);
-    when(proposerPreferencesManager.getProposerPreferences(state.getSlot()))
+    when(proposerPreferencesManager.getProposerPreferences(state.getSlot(), DEPENDENT_ROOT))
         .thenReturn(
             Optional.of(createProposerPreferences(validFeeRecipient, incompatibleTargetGasLimit)));
 
@@ -291,8 +299,94 @@ public class BuilderBidValidatorTest {
 
   @Test
   void rejectsWhenProposerPreferencesAbsent() {
-    when(proposerPreferencesManager.getProposerPreferences(any())).thenReturn(Optional.empty());
+    when(proposerPreferencesManager.getProposerPreferences(any(), any()))
+        .thenReturn(Optional.empty());
     assertThat(validate(validSignedBid(), state)).isFalse();
+  }
+
+  @Test
+  void rejectsWhenShufflingDependentRootIsUnavailable() {
+    when(gossipValidationHelper.getShufflingDependentRoot(any(), any()))
+        .thenReturn(Optional.empty());
+    assertThat(validate(validSignedBid(), state)).isFalse();
+  }
+
+  @Test
+  void rejectsIfBuilderIsNotAPayloadBuilder() {
+    final BeaconStateGloas stateWithOtherBuilderVersion =
+        createStateWithActiveBuilder(
+            spec.getGenesisSpec().getConfig().getMaxEffectiveBalance(),
+            PAYLOAD_BUILDER_VERSION + 1);
+    final BeaconStateAccessorsGloas beaconStateAccessors =
+        BeaconStateAccessorsGloas.required(
+            spec.atSlot(stateWithOtherBuilderVersion.getSlot()).beaconStateAccessors());
+
+    final SignedExecutionPayloadBid bid =
+        signedBidWith(
+            BUILDER_INDEX,
+            stateWithOtherBuilderVersion.getSlot(),
+            UInt64.ZERO,
+            stateWithOtherBuilderVersion.getLatestExecutionPayloadBid().getBlockHash(),
+            stateWithOtherBuilderVersion.getLatestBlockHeader().hashTreeRoot(),
+            beaconStateAccessors.getRandaoMix(
+                stateWithOtherBuilderVersion,
+                beaconStateAccessors.getCurrentEpoch(stateWithOtherBuilderVersion)),
+            validGasLimit,
+            validFeeRecipient);
+    assertThat(validate(bid, stateWithOtherBuilderVersion)).isFalse();
+  }
+
+  @Test
+  void rejectsIfBlockHashIsTheSameAsParentBlockHash() {
+    final SignedExecutionPayloadBid bid =
+        signedBidWith(
+            BUILDER_INDEX,
+            state.getSlot(),
+            UInt64.ZERO,
+            validParentBlockHash,
+            validParentBlockRoot,
+            validPrevRandao,
+            validGasLimit,
+            validFeeRecipient,
+            validParentBlockHash,
+            0);
+    assertThat(validate(bid, state)).isFalse();
+  }
+
+  @Test
+  void rejectsIfBlobKzgCommitmentCountExceedsTheMaximum() {
+    final int maxBlobsPerBlock = spec.getMaxBlobsPerBlockAtSlot(state.getSlot()).orElseThrow();
+    final SignedExecutionPayloadBid bid =
+        signedBidWith(
+            BUILDER_INDEX,
+            state.getSlot(),
+            UInt64.ZERO,
+            validParentBlockHash,
+            validParentBlockRoot,
+            validPrevRandao,
+            validGasLimit,
+            validFeeRecipient,
+            dataStructureUtil.randomBytes32(),
+            maxBlobsPerBlock + 1);
+    assertThat(validate(bid, state)).isFalse();
+  }
+
+  @Test
+  void acceptsBidWithTheMaximumNumberOfBlobKzgCommitments() {
+    final int maxBlobsPerBlock = spec.getMaxBlobsPerBlockAtSlot(state.getSlot()).orElseThrow();
+    final SignedExecutionPayloadBid bid =
+        signedBidWith(
+            BUILDER_INDEX,
+            state.getSlot(),
+            UInt64.ZERO,
+            validParentBlockHash,
+            validParentBlockRoot,
+            validPrevRandao,
+            validGasLimit,
+            validFeeRecipient,
+            dataStructureUtil.randomBytes32(),
+            maxBlobsPerBlock);
+    assertThat(validate(bid, state)).isTrue();
   }
 
   /**
@@ -326,6 +420,30 @@ public class BuilderBidValidatorTest {
       final Bytes32 prevRandao,
       final UInt64 gasLimit,
       final Eth1Address feeRecipient) {
+    return signedBidWith(
+        builderIndex,
+        slot,
+        value,
+        parentBlockHash,
+        parentBlockRoot,
+        prevRandao,
+        gasLimit,
+        feeRecipient,
+        dataStructureUtil.randomBytes32(),
+        0);
+  }
+
+  private SignedExecutionPayloadBid signedBidWith(
+      final UInt64 builderIndex,
+      final UInt64 slot,
+      final UInt64 value,
+      final Bytes32 parentBlockHash,
+      final Bytes32 parentBlockRoot,
+      final Bytes32 prevRandao,
+      final UInt64 gasLimit,
+      final Eth1Address feeRecipient,
+      final Bytes32 blockHash,
+      final int blobKzgCommitmentCount) {
     final SchemaDefinitionsGloas schemaDefinitions =
         SchemaDefinitionsGloas.required(spec.atSlot(slot).getSchemaDefinitions());
     final ExecutionPayloadBidSchema schema = schemaDefinitions.getExecutionPayloadBidSchema();
@@ -333,7 +451,7 @@ public class BuilderBidValidatorTest {
         schema.create(
             parentBlockHash,
             parentBlockRoot,
-            dataStructureUtil.randomBytes32(),
+            blockHash,
             prevRandao,
             feeRecipient,
             gasLimit,
@@ -341,7 +459,12 @@ public class BuilderBidValidatorTest {
             slot,
             value,
             UInt64.ZERO,
-            schema.getBlobKzgCommitmentsSchema().createFromElements(List.of()),
+            schema
+                .getBlobKzgCommitmentsSchema()
+                .createFromElements(
+                    IntStream.range(0, blobKzgCommitmentCount)
+                        .mapToObj(__ -> dataStructureUtil.randomSszKZGCommitment())
+                        .toList()),
             dataStructureUtil.randomBytes32());
     return schemaDefinitions
         .getSignedExecutionPayloadBidSchema()
@@ -355,7 +478,7 @@ public class BuilderBidValidatorTest {
     return schemaDefinitions
         .getProposerPreferencesSchema()
         .create(
-            dataStructureUtil.randomBytes32(),
+            DEPENDENT_ROOT,
             state.getSlot(),
             dataStructureUtil.randomUInt64(),
             feeRecipient,
@@ -363,6 +486,11 @@ public class BuilderBidValidatorTest {
   }
 
   private BeaconStateGloas createStateWithActiveBuilder(final UInt64 builderBalance) {
+    return createStateWithActiveBuilder(builderBalance, PAYLOAD_BUILDER_VERSION);
+  }
+
+  private BeaconStateGloas createStateWithActiveBuilder(
+      final UInt64 builderBalance, final int builderVersion) {
     final UInt64 slot =
         FINALIZED_EPOCH.times(spec.getGenesisSpec().getConfig().getSlotsPerEpoch()).plus(1);
 
@@ -376,6 +504,7 @@ public class BuilderBidValidatorTest {
             .depositEpoch(UInt64.ZERO)
             .withdrawableEpoch(FAR_FUTURE_EPOCH)
             .balance(builderBalance)
+            .version(builderVersion)
             .build();
 
     return dataStructureUtil
