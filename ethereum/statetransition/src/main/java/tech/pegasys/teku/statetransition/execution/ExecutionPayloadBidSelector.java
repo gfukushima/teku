@@ -17,6 +17,7 @@ import static tech.pegasys.teku.infrastructure.logging.Converter.weiToEth;
 import static tech.pegasys.teku.infrastructure.logging.LogFormatter.formatAbbreviatedHashRoot;
 import static tech.pegasys.teku.spec.constants.EthConstants.GWEI_TO_WEI;
 
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
@@ -28,6 +29,7 @@ import org.apache.tuweni.bytes.Bytes32;
 import org.apache.tuweni.units.bigints.UInt256;
 import tech.pegasys.teku.infrastructure.unsigned.UInt64;
 import tech.pegasys.teku.spec.datastructures.builder.versions.gloas.BuilderConfig;
+import tech.pegasys.teku.spec.datastructures.builder.versions.gloas.BuilderEntry;
 import tech.pegasys.teku.spec.datastructures.state.beaconstate.BeaconState;
 import tech.pegasys.teku.spec.executionlayer.BuilderBoostFactorEvaluator;
 import tech.pegasys.teku.spec.executionlayer.BuilderBoostFactorFormatter;
@@ -41,9 +43,6 @@ public class ExecutionPayloadBidSelector {
 
   private final boolean useShouldOverrideBuilderFlag;
   private final ExecutionPayloadBidCircuitBreaker executionPayloadBidCircuitBreaker;
-
-  private static final Comparator<RemoteBid> REMOTE_BID_BY_VALUE_ASCENDING =
-      Comparator.comparing(RemoteBid::valueInGwei);
 
   public ExecutionPayloadBidSelector(
       final boolean useShouldOverrideBuilderFlag,
@@ -65,37 +64,42 @@ public class ExecutionPayloadBidSelector {
       final Bytes32 parentBlockHash,
       final BeaconState state,
       final BuilderConfig builderConfig) {
+    final Predicate<RemoteBid> circuitBreakerPredicate =
+        bid -> executionPayloadBidCircuitBreaker.isBuilderAllowed(bid.builderIndex(), state);
     // A remote bid is eligible only if `bid_score >= min_bid
     final Predicate<RemoteBid> minBidPredicate =
-        bid -> bid.valueInGwei().isGreaterThanOrEqualTo(builderConfig.getMinBid());
-    final Optional<RemoteBid> bestP2PBid =
-        p2pBids.stream()
-            .filter(bid -> bid.bid().getMessage().getParentBlockRoot().equals(parentRoot))
-            .filter(bid -> bid.bid().getMessage().getParentBlockHash().equals(parentBlockHash))
-            .filter(
-                bid ->
-                    executionPayloadBidCircuitBreaker.isBuilderAllowed(bid.builderIndex(), state))
-            .filter(minBidPredicate)
-            .max(REMOTE_BID_BY_VALUE_ASCENDING);
-
-    final Optional<RemoteBid> bestBuilderBid =
-        builderBids.stream()
-            .filter(
-                bid ->
-                    executionPayloadBidCircuitBreaker.isBuilderAllowed(bid.builderIndex(), state))
-            .filter(minBidPredicate)
-            .max(REMOTE_BID_BY_VALUE_ASCENDING);
-
-    if (bestBuilderBid.isEmpty()) {
-      return bestP2PBid;
-    }
-    if (bestP2PBid.isEmpty()) {
-      return bestBuilderBid;
-    }
-    // on equal value, prefer the builder bid
-    return bestBuilderBid.get().valueInGwei().isGreaterThanOrEqualTo(bestP2PBid.get().valueInGwei())
-        ? bestBuilderBid
-        : bestP2PBid;
+        bid -> {
+          final UInt64 minBid =
+              bid.builderEntry()
+                  // if Builder API is used, use the configured min_bid
+                  .map(BuilderEntry::getMinBid)
+                  // fallback to top-level min_bid (applies to P2P bids)
+                  .orElse(builderConfig.getMinBid());
+          return bid.valueInGwei().isGreaterThanOrEqualTo(minBid);
+        };
+    final List<RemoteBid> eligibleRemoteBids = new ArrayList<>();
+    // Add eligible builder bids
+    builderBids.stream()
+        .filter(circuitBreakerPredicate)
+        .filter(minBidPredicate)
+        .forEach(eligibleRemoteBids::add);
+    // Add eligible p2p bids
+    p2pBids.stream()
+        .filter(bid -> bid.bid().getMessage().getParentBlockRoot().equals(parentRoot))
+        .filter(bid -> bid.bid().getMessage().getParentBlockHash().equals(parentBlockHash))
+        .filter(circuitBreakerPredicate)
+        .filter(minBidPredicate)
+        .forEach(eligibleRemoteBids::add);
+    // selecting the highest bid value based on their boosted values
+    final Comparator<RemoteBid> remoteBidByBoostedValueAscending =
+        Comparator.comparing(
+            bid -> {
+              final UInt64 builderBoostFactor = bid.builderBoostFactor(builderConfig);
+              return bid.valueInGwei()
+                  .bigIntegerValue()
+                  .multiply(builderBoostFactor.bigIntegerValue());
+            });
+    return eligibleRemoteBids.stream().max(remoteBidByBoostedValueAscending);
   }
 
   /**
@@ -145,7 +149,8 @@ public class ExecutionPayloadBidSelector {
       return selectLocalBid(localBid, slot);
     }
 
-    final UInt64 builderBoostFactor = builderConfig.getBuilderBoostFactor();
+    final UInt64 builderBoostFactor = remoteBid.builderBoostFactor(builderConfig);
+
     final boolean localValueWins =
         BuilderBoostFactorEvaluator.isLocalValueWinning(
             localBid.valueInWei(), remoteValueInWei, builderBoostFactor);
@@ -173,7 +178,8 @@ public class ExecutionPayloadBidSelector {
         remoteBid.builderIndex(),
         formatAbbreviatedHashRoot(remoteBid.bid().getMessage().getBlockHash()),
         slot);
-    return new BidForBlock(remoteBid.bid(), remoteValueInWei, remoteBid.builderUrl());
+    return new BidForBlock(
+        remoteBid.bid(), remoteValueInWei, remoteBid.builderEntry().map(BuilderEntry::getUrl));
   }
 
   private void logValueComparison(
