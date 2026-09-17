@@ -22,6 +22,7 @@ import org.apache.tuweni.bytes.Bytes32;
 import tech.pegasys.teku.infrastructure.ssz.SszList;
 import tech.pegasys.teku.infrastructure.unsigned.UInt64;
 import tech.pegasys.teku.spec.Spec;
+import tech.pegasys.teku.spec.SpecMilestone;
 import tech.pegasys.teku.spec.SpecVersion;
 import tech.pegasys.teku.spec.datastructures.builder.versions.gloas.BuilderEntry;
 import tech.pegasys.teku.spec.datastructures.epbs.versions.gloas.ExecutionPayloadBid;
@@ -58,7 +59,9 @@ public class BuilderBidValidator {
   }
 
   /**
-   * Validates a bid coming from the Builder API
+   * Validates a bid pulled over the Builder API. Bids arriving on the ePBS gossip topic are
+   * validated by {@link ExecutionPayloadBidGossipValidator} instead, so checks that gossip already
+   * enforces are repeated here rather than assumed.
    *
    * <p><a
    * href="https://github.com/ethereum/builder-specs/blob/main/specs/gloas/validator.md#validating-a-signedexecutionpayloadbid">Validating
@@ -79,7 +82,29 @@ public class BuilderBidValidator {
       final BuilderEntry builderEntry) {
     final ExecutionPayloadBid bid = signedBid.getMessage();
     final UInt64 slot = bid.getSlot();
+
+    /*
+     * The bid slot is untrusted input, so it is checked against the (trusted) state slot before it
+     * is used to resolve the fork-specific helpers below.
+     */
+    if (!slot.equals(state.getSlot())) {
+      LOG.warn(
+          "Bid from {} rejected: bid slot {} does not match state slot {}",
+          builderEntry.getUrl(),
+          slot,
+          state.getSlot());
+      return false;
+    }
+
     final SpecVersion specVersion = spec.atSlot(slot);
+    if (!specVersion.getMilestone().isGreaterThanOrEqualTo(SpecMilestone.GLOAS)) {
+      LOG.warn(
+          "Bid from {} rejected: slot {} is in {}, which is before Gloas",
+          builderEntry.getUrl(),
+          slot,
+          specVersion.getMilestone());
+      return false;
+    }
 
     final PredicatesGloas predicates = PredicatesGloas.required(specVersion.predicates());
     final BeaconStateAccessorsGloas beaconStateAccessors =
@@ -87,12 +112,10 @@ public class BuilderBidValidator {
     final BeaconStateGloas stateGloas = BeaconStateGloas.required(state);
 
     if (!predicates.isActiveBuilder(state, bid.getBuilderIndex())) {
-      LOG.warn("Bid rejected: builder {} is not active", bid.getBuilderIndex());
-      return false;
-    }
-
-    if (!slot.equals(state.getSlot())) {
-      LOG.warn("Bid rejected: bid slot {} does not match state slot {}", slot, state.getSlot());
+      LOG.warn(
+          "Bid from {} rejected: builder {} is not active",
+          builderEntry.getUrl(),
+          bid.getBuilderIndex());
       return false;
     }
 
@@ -105,7 +128,8 @@ public class BuilderBidValidator {
     final Builder builder = stateGloas.getBuilders().get(bid.getBuilderIndex().intValue());
     if (builder.getVersion() != PAYLOAD_BUILDER_VERSION) {
       LOG.warn(
-          "Bid rejected: builder {} has version {} but only payload builder version {} may bid",
+          "Bid from {} rejected: builder {} has version {} but only payload builder version {} may bid",
+          builderEntry.getUrl(),
           bid.getBuilderIndex(),
           builder.getVersion(),
           PAYLOAD_BUILDER_VERSION);
@@ -113,7 +137,9 @@ public class BuilderBidValidator {
     }
 
     if (bid.getBlockHash().equals(bid.getParentBlockHash())) {
-      LOG.warn("Bid rejected: block hash and parent block hash are the same");
+      LOG.warn(
+          "Bid from {} rejected: block hash and parent block hash are the same",
+          builderEntry.getUrl());
       return false;
     }
 
@@ -121,7 +147,8 @@ public class BuilderBidValidator {
     if (maybeMaxBlobsPerBlock.isPresent()
         && bid.getBlobKzgCommitments().size() > maybeMaxBlobsPerBlock.get()) {
       LOG.warn(
-          "Bid rejected: has {} blob kzg commitments which exceeds the maximum of {} for the slot",
+          "Bid from {} rejected: has {} blob kzg commitments which exceeds the maximum of {} for the slot",
+          builderEntry.getUrl(),
           bid.getBlobKzgCommitments().size(),
           maybeMaxBlobsPerBlock.get());
       return false;
@@ -138,21 +165,23 @@ public class BuilderBidValidator {
         && allowedBuilderPubkeys.stream()
             .noneMatch(pubkey -> pubkey.getBLSPublicKey().equals(builder.getPublicKey()))) {
       LOG.warn(
-          "Bid rejected: builder {} (pubkey {}) is not in the builder_pubkeys configured for {}",
+          "Bid from {} rejected: builder {} (pubkey {}) is not in its configured builder_pubkeys",
+          builderEntry.getUrl(),
           bid.getBuilderIndex(),
-          builder.getPublicKey(),
-          builderEntry.getUrl());
+          builder.getPublicKey());
       return false;
     }
 
     if (!bid.getParentBlockHash().equals(stateGloas.getLatestExecutionPayloadBid().getBlockHash())
         && !bid.getParentBlockHash().equals(stateGloas.getLatestBlockHash())) {
-      LOG.warn("Bid rejected: parent block hash does not extend a known parent");
+      LOG.warn(
+          "Bid from {} rejected: parent block hash does not extend a known parent",
+          builderEntry.getUrl());
       return false;
     }
 
     if (!bid.getParentBlockRoot().equals(state.getLatestBlockHeader().hashTreeRoot())) {
-      LOG.warn("Bid rejected: parent block root mismatch");
+      LOG.warn("Bid from {} rejected: parent block root mismatch", builderEntry.getUrl());
       return false;
     }
 
@@ -165,7 +194,8 @@ public class BuilderBidValidator {
     if (!bid.getParentBlockHash().equals(parentBlockHash)
         || !bid.getParentBlockRoot().equals(parentBlockRoot)) {
       LOG.warn(
-          "Bid rejected: bid parent (block hash {}, block root {}) does not match the parent the block is being built on (block hash {}, block root {})",
+          "Bid from {} rejected: bid parent (block hash {}, block root {}) does not match the parent the block is being built on (block hash {}, block root {})",
+          builderEntry.getUrl(),
           bid.getParentBlockHash(),
           bid.getParentBlockRoot(),
           parentBlockHash,
@@ -177,7 +207,7 @@ public class BuilderBidValidator {
         .equals(
             beaconStateAccessors.getRandaoMix(
                 state, beaconStateAccessors.getCurrentEpoch(state)))) {
-      LOG.warn("Bid rejected: prev_randao mismatch");
+      LOG.warn("Bid from {} rejected: prev_randao mismatch", builderEntry.getUrl());
       return false;
     }
 
@@ -191,7 +221,8 @@ public class BuilderBidValidator {
         gossipValidationHelper.getShufflingDependentRoot(bid.getParentBlockRoot(), slot);
     if (maybeDependentRoot.isEmpty()) {
       LOG.warn(
-          "Bid rejected: shuffling dependent root is unavailable for parent block root {}",
+          "Bid from {} rejected: shuffling dependent root is unavailable for parent block root {}",
+          builderEntry.getUrl(),
           bid.getParentBlockRoot());
       return false;
     }
@@ -199,14 +230,18 @@ public class BuilderBidValidator {
     final Optional<ProposerPreferences> maybeProposerPreferences =
         proposerPreferencesManager.getProposerPreferences(slot, maybeDependentRoot.get());
     if (maybeProposerPreferences.isEmpty()) {
-      LOG.warn("Bid rejected: no proposer preferences available for slot {}", slot);
+      LOG.warn(
+          "Bid from {} rejected: no proposer preferences available for slot {}",
+          builderEntry.getUrl(),
+          slot);
       return false;
     }
     final ProposerPreferences proposerPreferences = maybeProposerPreferences.get();
 
     if (!bid.getFeeRecipient().equals(proposerPreferences.getFeeRecipient())) {
       LOG.warn(
-          "Bid rejected: fee recipient {} does not match proposer preferences fee recipient {}",
+          "Bid from {} rejected: fee recipient {} does not match proposer preferences fee recipient {}",
+          builderEntry.getUrl(),
           bid.getFeeRecipient(),
           proposerPreferences.getFeeRecipient());
       return false;
@@ -217,7 +252,8 @@ public class BuilderBidValidator {
             bid.getParentBlockRoot(), bid.getParentBlockHash());
     if (maybeParentGasLimit.isEmpty()) {
       LOG.warn(
-          "Bid rejected: parent execution payload gas limit is unavailable for parent block root {} and block hash {}",
+          "Bid from {} rejected: parent execution payload gas limit is unavailable for parent block root {} and block hash {}",
+          builderEntry.getUrl(),
           bid.getParentBlockRoot(),
           bid.getParentBlockHash());
       return false;
@@ -226,7 +262,8 @@ public class BuilderBidValidator {
     if (!ExecutionPayloadBidGossipValidator.isGasLimitTargetCompatible(
         maybeParentGasLimit.get(), bid.getGasLimit(), proposerPreferences.getTargetGasLimit())) {
       LOG.warn(
-          "Bid rejected: gas limit {} is not compatible with parent gas limit {} and proposer preferences target gas limit {}",
+          "Bid from {} rejected: gas limit {} is not compatible with parent gas limit {} and proposer preferences target gas limit {}",
+          builderEntry.getUrl(),
           bid.getGasLimit(),
           maybeParentGasLimit.get(),
           proposerPreferences.getTargetGasLimit());
@@ -242,7 +279,8 @@ public class BuilderBidValidator {
      */
     if (!beaconStateAccessors.canBuilderCoverBid(state, bid.getBuilderIndex(), bid.getValue())) {
       LOG.warn(
-          "Bid rejected: builder {} cannot cover bid value {}",
+          "Bid from {} rejected: builder {} cannot cover bid value {}",
+          builderEntry.getUrl(),
           bid.getBuilderIndex(),
           bid.getValue());
       return false;
@@ -252,7 +290,10 @@ public class BuilderBidValidator {
         .operationSignatureVerifier()
         .verifyExecutionPayloadBidSignature(
             state, signedBid, specVersion.getConfig().getBLSSignatureVerifier())) {
-      LOG.warn("Bid rejected: invalid signature from builder {}", bid.getBuilderIndex());
+      LOG.warn(
+          "Bid from {} rejected: invalid signature from builder {}",
+          builderEntry.getUrl(),
+          bid.getBuilderIndex());
       return false;
     }
 
