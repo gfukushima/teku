@@ -78,6 +78,9 @@ public class ExecutionPayloadBidSelector {
           return bid.valueInGwei().isGreaterThanOrEqualTo(minBid);
         };
     final List<RemoteBid> eligibleRemoteBids = new ArrayList<>();
+    // Builder bids are added before p2p bids so that a builder bid wins on equal boosted value:
+    // Stream.max keeps the earlier element when the comparator reports equality. Do not reorder
+    // these two blocks without also making the tie-break explicit.
     // Add eligible builder bids
     builderBids.stream()
         .filter(circuitBreakerPredicate)
