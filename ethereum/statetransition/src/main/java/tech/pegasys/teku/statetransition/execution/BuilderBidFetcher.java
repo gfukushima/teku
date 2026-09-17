@@ -34,6 +34,15 @@ import tech.pegasys.teku.spec.datastructures.epbs.versions.gloas.SignedExecution
 import tech.pegasys.teku.spec.datastructures.state.beaconstate.BeaconState;
 import tech.pegasys.teku.statetransition.execution.ExecutionPayloadBidManager.RemoteBid;
 
+/**
+ * Pulls bids over the Builder API, by sending an HTTP request to each builder configured in the
+ * {@link BuilderConfig}.
+ *
+ * <p>This is one of the two sources of remote bids. The other one is the ePBS gossip topic, served
+ * by {@link DefaultExecutionPayloadBidManager}; those bids are validated on the gossip path
+ * instead. Bids from both sources compete in {@link ExecutionPayloadBidSelector}, where a bid
+ * fetched here is the only kind carrying a {@link BuilderEntry}.
+ */
 public class BuilderBidFetcher {
 
   private static final Logger LOG = LogManager.getLogger();
@@ -51,6 +60,12 @@ public class BuilderBidFetcher {
     this.bidValidator = bidValidator;
   }
 
+  /**
+   * Requests a bid from every configured builder in parallel and returns the ones that both
+   * answered and passed validation, so a failing or misbehaving builder cannot hold up the others.
+   *
+   * @return the valid bids, which may be empty, never a failed future
+   */
   public SafeFuture<List<RemoteBid>> getBuilderBids(
       final BeaconState state,
       final UInt64 slot,
