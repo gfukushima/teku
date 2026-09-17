@@ -19,19 +19,24 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static tech.pegasys.teku.spec.config.SpecConfig.FAR_FUTURE_EPOCH;
 import static tech.pegasys.teku.spec.config.SpecConfigGloas.PAYLOAD_BUILDER_VERSION;
+import static tech.pegasys.teku.spec.schemas.ApiSchemas.BUILDER_ENTRY_SCHEMA;
 
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Optional;
 import java.util.stream.IntStream;
+import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import tech.pegasys.teku.bls.BLSPublicKey;
 import tech.pegasys.teku.bls.BLSSignatureVerifier;
 import tech.pegasys.teku.ethereum.execution.types.Eth1Address;
 import tech.pegasys.teku.infrastructure.unsigned.UInt64;
 import tech.pegasys.teku.spec.Spec;
 import tech.pegasys.teku.spec.SpecMilestone;
 import tech.pegasys.teku.spec.TestSpecFactory;
+import tech.pegasys.teku.spec.datastructures.builder.versions.gloas.BuilderEntry;
 import tech.pegasys.teku.spec.datastructures.epbs.versions.gloas.ExecutionPayloadBid;
 import tech.pegasys.teku.spec.datastructures.epbs.versions.gloas.ExecutionPayloadBidSchema;
 import tech.pegasys.teku.spec.datastructures.epbs.versions.gloas.ProposerPreferences;
@@ -179,7 +184,13 @@ public class BuilderBidValidatorTest {
             validPrevRandao,
             validGasLimit,
             validFeeRecipient);
-    assertThat(validator.validateBid(bid, state, validParentBlockHash, validParentBlockRoot))
+    assertThat(
+            validator.validateBid(
+                bid,
+                state,
+                validParentBlockHash,
+                validParentBlockRoot,
+                builderEntryWithPubkeys(List.of())))
         .isFalse();
   }
 
@@ -187,7 +198,11 @@ public class BuilderBidValidatorTest {
   void rejectsBidWhoseParentBlockRootIsNotTheOneBeingBuiltOn() {
     assertThat(
             validator.validateBid(
-                validSignedBid(), state, validParentBlockHash, dataStructureUtil.randomBytes32()))
+                validSignedBid(),
+                state,
+                validParentBlockHash,
+                dataStructureUtil.randomBytes32(),
+                builderEntryWithPubkeys(List.of())))
         .isFalse();
   }
 
@@ -322,6 +337,25 @@ public class BuilderBidValidatorTest {
   }
 
   @Test
+  void rejectsBidFromBuilderNotInTheEntryPubkeyAllowlist() {
+    final BuilderEntry builderEntry =
+        builderEntryWithPubkeys(List.of(dataStructureUtil.randomPublicKey()));
+    assertThat(validate(validSignedBid(), state, builderEntry)).isFalse();
+  }
+
+  @Test
+  void acceptsBidFromBuilderInTheEntryPubkeyAllowlist() {
+    final BuilderEntry builderEntry =
+        builderEntryWithPubkeys(List.of(dataStructureUtil.randomPublicKey(), builderPubkey()));
+    assertThat(validate(validSignedBid(), state, builderEntry)).isTrue();
+  }
+
+  @Test
+  void acceptsBidFromAnyBuilderWhenTheEntryPubkeyAllowlistIsEmpty() {
+    assertThat(validate(validSignedBid(), state, builderEntryWithPubkeys(List.of()))).isTrue();
+  }
+
+  @Test
   void rejectsWhenProposerPreferencesAbsent() {
     when(proposerPreferencesManager.getProposerPreferences(any(), any()))
         .thenReturn(Optional.empty());
@@ -418,9 +452,30 @@ public class BuilderBidValidatorTest {
    * targets. The bids that do not extend the parent being built on are covered separately.
    */
   private boolean validate(final SignedExecutionPayloadBid signedBid, final BeaconState state) {
+    return validate(signedBid, state, builderEntryWithPubkeys(List.of()));
+  }
+
+  private boolean validate(
+      final SignedExecutionPayloadBid signedBid,
+      final BeaconState state,
+      final BuilderEntry builderEntry) {
     final ExecutionPayloadBid bid = signedBid.getMessage();
     return validator.validateBid(
-        signedBid, state, bid.getParentBlockHash(), bid.getParentBlockRoot());
+        signedBid, state, bid.getParentBlockHash(), bid.getParentBlockRoot(), builderEntry);
+  }
+
+  private BLSPublicKey builderPubkey() {
+    return state.getBuilders().get(BUILDER_INDEX.intValue()).getPublicKey();
+  }
+
+  private BuilderEntry builderEntryWithPubkeys(final List<BLSPublicKey> builderPubkeys) {
+    return BUILDER_ENTRY_SCHEMA.create(
+        Bytes.of("https://builder.example.com".getBytes(StandardCharsets.UTF_8)),
+        dataStructureUtil.randomSignedBuilderRequestAuth(),
+        builderPubkeys,
+        UInt64.MAX_VALUE,
+        UInt64.ZERO,
+        UInt64.valueOf(100));
   }
 
   private SignedExecutionPayloadBid validSignedBid() {

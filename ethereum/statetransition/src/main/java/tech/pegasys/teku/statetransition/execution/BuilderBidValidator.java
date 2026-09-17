@@ -19,15 +19,18 @@ import java.util.Optional;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.tuweni.bytes.Bytes32;
+import tech.pegasys.teku.infrastructure.ssz.SszList;
 import tech.pegasys.teku.infrastructure.unsigned.UInt64;
 import tech.pegasys.teku.spec.Spec;
 import tech.pegasys.teku.spec.SpecVersion;
+import tech.pegasys.teku.spec.datastructures.builder.versions.gloas.BuilderEntry;
 import tech.pegasys.teku.spec.datastructures.epbs.versions.gloas.ExecutionPayloadBid;
 import tech.pegasys.teku.spec.datastructures.epbs.versions.gloas.ProposerPreferences;
 import tech.pegasys.teku.spec.datastructures.epbs.versions.gloas.SignedExecutionPayloadBid;
 import tech.pegasys.teku.spec.datastructures.state.beaconstate.BeaconState;
 import tech.pegasys.teku.spec.datastructures.state.beaconstate.versions.gloas.BeaconStateGloas;
 import tech.pegasys.teku.spec.datastructures.state.versions.gloas.Builder;
+import tech.pegasys.teku.spec.datastructures.type.SszPublicKey;
 import tech.pegasys.teku.spec.logic.versions.gloas.helpers.BeaconStateAccessorsGloas;
 import tech.pegasys.teku.spec.logic.versions.gloas.helpers.PredicatesGloas;
 import tech.pegasys.teku.statetransition.validation.ExecutionPayloadBidGossipValidator;
@@ -65,13 +68,15 @@ public class BuilderBidValidator {
    * @param state the current beacon state
    * @param parentBlockHash the block hash of the parent the block is being built on
    * @param parentBlockRoot the block root of the parent the block is being built on
+   * @param builderEntry the entry whose bid request returned this bid
    * @return true if the bid is valid, false otherwise
    */
   public boolean validateBid(
       final SignedExecutionPayloadBid signedBid,
       final BeaconState state,
       final Bytes32 parentBlockHash,
-      final Bytes32 parentBlockRoot) {
+      final Bytes32 parentBlockRoot,
+      final BuilderEntry builderEntry) {
     final ExecutionPayloadBid bid = signedBid.getMessage();
     final UInt64 slot = bid.getSlot();
     final SpecVersion specVersion = spec.atSlot(slot);
@@ -119,6 +124,24 @@ public class BuilderBidValidator {
           "Bid rejected: has {} blob kzg commitments which exceeds the maximum of {} for the slot",
           bid.getBlobKzgCommitments().size(),
           maybeMaxBlobsPerBlock.get());
+      return false;
+    }
+
+    /*
+     * An empty builder_pubkeys list accepts any builder, but a non-empty one is an allowlist and a
+     * bid must be signed by one of its keys. Without this check the entry's trusted
+     * max_execution_payment, min_bid and builder_boost_factor would be applied to a bid from any
+     * active on-chain builder, not just the one the validator client asked for.
+     */
+    final SszList<SszPublicKey> allowedBuilderPubkeys = builderEntry.getBuilderPubkeys();
+    if (!allowedBuilderPubkeys.isEmpty()
+        && allowedBuilderPubkeys.stream()
+            .noneMatch(pubkey -> pubkey.getBLSPublicKey().equals(builder.getPublicKey()))) {
+      LOG.warn(
+          "Bid rejected: builder {} (pubkey {}) is not in the builder_pubkeys configured for {}",
+          bid.getBuilderIndex(),
+          builder.getPublicKey(),
+          builderEntry.getUrl());
       return false;
     }
 

@@ -50,7 +50,7 @@ public class BuilderBidFetcherTest {
 
   @BeforeEach
   void setUp() {
-    when(bidValidator.validateBid(any(), any(), any(), any())).thenReturn(true);
+    when(bidValidator.validateBid(any(), any(), any(), any(), any())).thenReturn(true);
   }
 
   @Test
@@ -108,7 +108,7 @@ public class BuilderBidFetcherTest {
     when(builderClient.getExecutionPayloadBid(any(), any(), any(), any(), any()))
         .thenReturn(SafeFuture.completedFuture(Optional.of(validBid)))
         .thenReturn(SafeFuture.completedFuture(Optional.of(invalidBid)));
-    when(bidValidator.validateBid(eq(invalidBid), any(), any(), any())).thenReturn(false);
+    when(bidValidator.validateBid(eq(invalidBid), any(), any(), any(), any())).thenReturn(false);
 
     final List<RemoteBid> result =
         SafeFutureAssert.safeJoin(
@@ -120,6 +120,34 @@ public class BuilderBidFetcherTest {
                 dataStructureUtil.randomBytes32()));
 
     assertThat(result).map(RemoteBid::bid).containsExactly(validBid);
+  }
+
+  @Test
+  void validatesEachBidAgainstTheEntryWhoseRequestReturnedIt() {
+    final BeaconState state = dataStructureUtil.randomBeaconState();
+    final SignedExecutionPayloadBid firstBid = dataStructureUtil.randomSignedExecutionPayloadBid();
+    final SignedExecutionPayloadBid secondBid = dataStructureUtil.randomSignedExecutionPayloadBid();
+    final BuilderConfig builderConfig = dataStructureUtil.randomBuilderConfig(2);
+    when(stakedBuilderClientProvider.getClient(any())).thenReturn(builderClient);
+    when(builderClient.getExecutionPayloadBid(any(), any(), any(), any(), any()))
+        .thenReturn(SafeFuture.completedFuture(Optional.of(firstBid)))
+        .thenReturn(SafeFuture.completedFuture(Optional.of(secondBid)));
+    // rejecting by entry rather than by bid: the second bid is only dropped if it was validated
+    // against the second entry, the one whose request returned it
+    when(bidValidator.validateBid(
+            any(), any(), any(), any(), eq(builderConfig.getBuilders().get(1))))
+        .thenReturn(false);
+
+    final List<RemoteBid> result =
+        SafeFutureAssert.safeJoin(
+            fetcher.getBuilderBids(
+                state,
+                state.getSlot(),
+                builderConfig,
+                dataStructureUtil.randomBytes32(),
+                dataStructureUtil.randomBytes32()));
+
+    assertThat(result).map(RemoteBid::bid).containsExactly(firstBid);
   }
 
   @Test

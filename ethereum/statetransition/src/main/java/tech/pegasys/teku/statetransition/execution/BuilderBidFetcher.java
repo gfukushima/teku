@@ -76,7 +76,10 @@ public class BuilderBidFetcher {
                         .thenApply(
                             maybeBid ->
                                 maybeBid
-                                    .filter(bid -> validateBid(bid, state, parentHash, parentRoot))
+                                    .filter(
+                                        bid ->
+                                            validateBid(
+                                                bid, state, parentHash, parentRoot, builderEntry))
                                     .map(bid -> createRemoteBid(bid, builderEntry)))
                         .whenComplete(
                             (maybeBid, exception) -> {
@@ -110,9 +113,10 @@ public class BuilderBidFetcher {
       final SignedExecutionPayloadBid bid,
       final BeaconState state,
       final Bytes32 parentHash,
-      final Bytes32 parentRoot) {
+      final Bytes32 parentRoot,
+      final BuilderEntry builderEntry) {
     try {
-      return bidValidator.validateBid(bid, state, parentHash, parentRoot);
+      return bidValidator.validateBid(bid, state, parentHash, parentRoot, builderEntry);
     } catch (final Exception ex) {
       LOG.warn(
           "Exception occurred while validating a bid from builder {}",
