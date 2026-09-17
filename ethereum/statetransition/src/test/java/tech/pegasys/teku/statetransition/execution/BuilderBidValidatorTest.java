@@ -298,6 +298,30 @@ public class BuilderBidValidatorTest {
   }
 
   @Test
+  void rejectsZeroValueBidFromAnUnderfundedBuilder() {
+    // validate_bid skips the collateral check when value is 0, but process_execution_payload_bid
+    // does not, and an underfunded builder cannot cover even a zero amount
+    final BeaconState lowBalanceState = createStateWithActiveBuilder(UInt64.ZERO);
+    final BeaconStateGloas stateGloas = BeaconStateGloas.required(lowBalanceState);
+    final BeaconStateAccessorsGloas beaconStateAccessors =
+        BeaconStateAccessorsGloas.required(
+            spec.atSlot(lowBalanceState.getSlot()).beaconStateAccessors());
+
+    final SignedExecutionPayloadBid bid =
+        signedBidWith(
+            BUILDER_INDEX,
+            lowBalanceState.getSlot(),
+            UInt64.ZERO,
+            stateGloas.getLatestExecutionPayloadBid().getBlockHash(),
+            lowBalanceState.getLatestBlockHeader().hashTreeRoot(),
+            beaconStateAccessors.getRandaoMix(
+                lowBalanceState, beaconStateAccessors.getCurrentEpoch(lowBalanceState)),
+            validGasLimit,
+            validFeeRecipient);
+    assertThat(validate(bid, lowBalanceState)).isFalse();
+  }
+
+  @Test
   void rejectsWhenProposerPreferencesAbsent() {
     when(proposerPreferencesManager.getProposerPreferences(any(), any()))
         .thenReturn(Optional.empty());

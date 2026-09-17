@@ -210,9 +210,18 @@ public class BuilderBidValidator {
       return false;
     }
 
-    if (bid.getValue().isGreaterThan(UInt64.ZERO)
-        && !beaconStateAccessors.canBuilderCoverBid(state, bid.getBuilderIndex(), bid.getValue())) {
-      LOG.warn("Bid rejected: builder {} cannot cover bid value", bid.getBuilderIndex());
+    /*
+     * validate_bid only asserts this when bid.value > 0, but process_execution_payload_bid runs it
+     * unconditionally, and can_builder_cover_bid returns false for an underfunded builder even for
+     * a zero amount (its balance is below MIN_DEPOSIT_AMOUNT plus pending withdrawals). Checking
+     * unconditionally stops an active but underfunded builder from winning selection with a zero
+     * value bid, boosted by execution_payment, and then failing block processing.
+     */
+    if (!beaconStateAccessors.canBuilderCoverBid(state, bid.getBuilderIndex(), bid.getValue())) {
+      LOG.warn(
+          "Bid rejected: builder {} cannot cover bid value {}",
+          bid.getBuilderIndex(),
+          bid.getValue());
       return false;
     }
 
