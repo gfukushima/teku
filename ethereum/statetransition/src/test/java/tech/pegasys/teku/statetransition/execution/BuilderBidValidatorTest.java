@@ -139,6 +139,35 @@ public class BuilderBidValidatorTest {
   }
 
   @Test
+  void rejectsBidForASlotWhoseMilestoneIsBeforeGloas() {
+    final Spec preGloasSpec = TestSpecFactory.createMinimalWithGloasForkEpoch(UInt64.valueOf(100));
+    final BeaconState preGloasState =
+        new DataStructureUtil(preGloasSpec).randomBeaconState(UInt64.ONE);
+    final BuilderBidValidator preGloasValidator =
+        new BuilderBidValidator(
+            preGloasSpec, proposerPreferencesManager, recentChainData, gossipValidationHelper);
+    final SignedExecutionPayloadBid bid =
+        signedBidWith(
+            BUILDER_INDEX,
+            preGloasState.getSlot(),
+            UInt64.ZERO,
+            validParentBlockHash,
+            validParentBlockRoot,
+            validPrevRandao,
+            validGasLimit,
+            validFeeRecipient);
+
+    assertThat(
+            preGloasValidator.validateBid(
+                bid,
+                preGloasState,
+                bid.getMessage().getParentBlockHash(),
+                bid.getMessage().getParentBlockRoot(),
+                builderEntryWithPubkeys(List.of())))
+        .isFalse();
+  }
+
+  @Test
   void rejectsIfParentBlockHashDoesNotMatchEither() {
     final SignedExecutionPayloadBid bid =
         signedBidWith(
