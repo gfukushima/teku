@@ -89,8 +89,9 @@ public class BuilderBidValidator {
      */
     if (!slot.equals(state.getSlot())) {
       LOG.warn(
-          "Bid from {} rejected: bid slot {} does not match state slot {}",
+          "Bid from {} (builder {}) rejected: bid slot {} does not match state slot {}",
           builderEntry.getUrl(),
+          bid.getBuilderIndex(),
           slot,
           state.getSlot());
       return false;
@@ -99,8 +100,9 @@ public class BuilderBidValidator {
     final SpecVersion specVersion = spec.atSlot(slot);
     if (!specVersion.getMilestone().isGreaterThanOrEqualTo(SpecMilestone.GLOAS)) {
       LOG.warn(
-          "Bid from {} rejected: slot {} is in {}, which is before Gloas",
+          "Bid from {} (builder {}) rejected: slot {} is in {}, which is before Gloas",
           builderEntry.getUrl(),
+          bid.getBuilderIndex(),
           slot,
           specVersion.getMilestone());
       return false;
@@ -113,7 +115,7 @@ public class BuilderBidValidator {
 
     if (!predicates.isActiveBuilder(state, bid.getBuilderIndex())) {
       LOG.warn(
-          "Bid from {} rejected: builder {} is not active",
+          "Bid from {} (builder {}) rejected: builder is not active",
           builderEntry.getUrl(),
           bid.getBuilderIndex());
       return false;
@@ -128,7 +130,7 @@ public class BuilderBidValidator {
     final Builder builder = stateGloas.getBuilders().get(bid.getBuilderIndex().intValue());
     if (builder.getVersion() != PAYLOAD_BUILDER_VERSION) {
       LOG.warn(
-          "Bid from {} rejected: builder {} has version {} but only payload builder version {} may bid",
+          "Bid from {} (builder {}) rejected: builder has version {} but only payload builder version {} may bid",
           builderEntry.getUrl(),
           bid.getBuilderIndex(),
           builder.getVersion(),
@@ -138,8 +140,9 @@ public class BuilderBidValidator {
 
     if (bid.getBlockHash().equals(bid.getParentBlockHash())) {
       LOG.warn(
-          "Bid from {} rejected: block hash and parent block hash are the same",
-          builderEntry.getUrl());
+          "Bid from {} (builder {}) rejected: block hash and parent block hash are the same",
+          builderEntry.getUrl(),
+          bid.getBuilderIndex());
       return false;
     }
 
@@ -147,8 +150,9 @@ public class BuilderBidValidator {
     if (maybeMaxBlobsPerBlock.isPresent()
         && bid.getBlobKzgCommitments().size() > maybeMaxBlobsPerBlock.get()) {
       LOG.warn(
-          "Bid from {} rejected: has {} blob kzg commitments which exceeds the maximum of {} for the slot",
+          "Bid from {} (builder {}) rejected: has {} blob kzg commitments which exceeds the maximum of {} for the slot",
           builderEntry.getUrl(),
+          bid.getBuilderIndex(),
           bid.getBlobKzgCommitments().size(),
           maybeMaxBlobsPerBlock.get());
       return false;
@@ -165,7 +169,7 @@ public class BuilderBidValidator {
         && allowedBuilderPubkeys.stream()
             .noneMatch(pubkey -> pubkey.getBLSPublicKey().equals(builder.getPublicKey()))) {
       LOG.warn(
-          "Bid from {} rejected: builder {} (pubkey {}) is not in its configured builder_pubkeys",
+          "Bid from {} (builder {}) rejected: pubkey {} is not in its configured builder_pubkeys",
           builderEntry.getUrl(),
           bid.getBuilderIndex(),
           builder.getPublicKey());
@@ -175,13 +179,17 @@ public class BuilderBidValidator {
     if (!bid.getParentBlockHash().equals(stateGloas.getLatestExecutionPayloadBid().getBlockHash())
         && !bid.getParentBlockHash().equals(stateGloas.getLatestBlockHash())) {
       LOG.warn(
-          "Bid from {} rejected: parent block hash does not extend a known parent",
-          builderEntry.getUrl());
+          "Bid from {} (builder {}) rejected: parent block hash does not extend a known parent",
+          builderEntry.getUrl(),
+          bid.getBuilderIndex());
       return false;
     }
 
     if (!bid.getParentBlockRoot().equals(state.getLatestBlockHeader().hashTreeRoot())) {
-      LOG.warn("Bid from {} rejected: parent block root mismatch", builderEntry.getUrl());
+      LOG.warn(
+          "Bid from {} (builder {}) rejected: parent block root mismatch",
+          builderEntry.getUrl(),
+          bid.getBuilderIndex());
       return false;
     }
 
@@ -194,8 +202,9 @@ public class BuilderBidValidator {
     if (!bid.getParentBlockHash().equals(parentBlockHash)
         || !bid.getParentBlockRoot().equals(parentBlockRoot)) {
       LOG.warn(
-          "Bid from {} rejected: bid parent (block hash {}, block root {}) does not match the parent the block is being built on (block hash {}, block root {})",
+          "Bid from {} (builder {}) rejected: bid parent (block hash {}, block root {}) does not match the parent the block is being built on (block hash {}, block root {})",
           builderEntry.getUrl(),
+          bid.getBuilderIndex(),
           bid.getParentBlockHash(),
           bid.getParentBlockRoot(),
           parentBlockHash,
@@ -207,7 +216,10 @@ public class BuilderBidValidator {
         .equals(
             beaconStateAccessors.getRandaoMix(
                 state, beaconStateAccessors.getCurrentEpoch(state)))) {
-      LOG.warn("Bid from {} rejected: prev_randao mismatch", builderEntry.getUrl());
+      LOG.warn(
+          "Bid from {} (builder {}) rejected: prev_randao mismatch",
+          builderEntry.getUrl(),
+          bid.getBuilderIndex());
       return false;
     }
 
@@ -221,8 +233,9 @@ public class BuilderBidValidator {
         gossipValidationHelper.getShufflingDependentRoot(bid.getParentBlockRoot(), slot);
     if (maybeDependentRoot.isEmpty()) {
       LOG.warn(
-          "Bid from {} rejected: shuffling dependent root is unavailable for parent block root {}",
+          "Bid from {} (builder {}) rejected: shuffling dependent root is unavailable for parent block root {}",
           builderEntry.getUrl(),
+          bid.getBuilderIndex(),
           bid.getParentBlockRoot());
       return false;
     }
@@ -231,8 +244,9 @@ public class BuilderBidValidator {
         proposerPreferencesManager.getProposerPreferences(slot, maybeDependentRoot.get());
     if (maybeProposerPreferences.isEmpty()) {
       LOG.warn(
-          "Bid from {} rejected: no proposer preferences available for slot {}",
+          "Bid from {} (builder {}) rejected: no proposer preferences available for slot {}",
           builderEntry.getUrl(),
+          bid.getBuilderIndex(),
           slot);
       return false;
     }
@@ -240,8 +254,9 @@ public class BuilderBidValidator {
 
     if (!bid.getFeeRecipient().equals(proposerPreferences.getFeeRecipient())) {
       LOG.warn(
-          "Bid from {} rejected: fee recipient {} does not match proposer preferences fee recipient {}",
+          "Bid from {} (builder {}) rejected: fee recipient {} does not match proposer preferences fee recipient {}",
           builderEntry.getUrl(),
+          bid.getBuilderIndex(),
           bid.getFeeRecipient(),
           proposerPreferences.getFeeRecipient());
       return false;
@@ -252,8 +267,9 @@ public class BuilderBidValidator {
             bid.getParentBlockRoot(), bid.getParentBlockHash());
     if (maybeParentGasLimit.isEmpty()) {
       LOG.warn(
-          "Bid from {} rejected: parent execution payload gas limit is unavailable for parent block root {} and block hash {}",
+          "Bid from {} (builder {}) rejected: parent execution payload gas limit is unavailable for parent block root {} and block hash {}",
           builderEntry.getUrl(),
+          bid.getBuilderIndex(),
           bid.getParentBlockRoot(),
           bid.getParentBlockHash());
       return false;
@@ -262,8 +278,9 @@ public class BuilderBidValidator {
     if (!ExecutionPayloadBidGossipValidator.isGasLimitTargetCompatible(
         maybeParentGasLimit.get(), bid.getGasLimit(), proposerPreferences.getTargetGasLimit())) {
       LOG.warn(
-          "Bid from {} rejected: gas limit {} is not compatible with parent gas limit {} and proposer preferences target gas limit {}",
+          "Bid from {} (builder {}) rejected: gas limit {} is not compatible with parent gas limit {} and proposer preferences target gas limit {}",
           builderEntry.getUrl(),
+          bid.getBuilderIndex(),
           bid.getGasLimit(),
           maybeParentGasLimit.get(),
           proposerPreferences.getTargetGasLimit());
@@ -279,7 +296,7 @@ public class BuilderBidValidator {
      */
     if (!beaconStateAccessors.canBuilderCoverBid(state, bid.getBuilderIndex(), bid.getValue())) {
       LOG.warn(
-          "Bid from {} rejected: builder {} cannot cover bid value {}",
+          "Bid from {} (builder {}) rejected: builder cannot cover bid value {}",
           builderEntry.getUrl(),
           bid.getBuilderIndex(),
           bid.getValue());
@@ -291,7 +308,7 @@ public class BuilderBidValidator {
         .verifyExecutionPayloadBidSignature(
             state, signedBid, specVersion.getConfig().getBLSSignatureVerifier())) {
       LOG.warn(
-          "Bid from {} rejected: invalid signature from builder {}",
+          "Bid from {} (builder {}) rejected: invalid signature",
           builderEntry.getUrl(),
           bid.getBuilderIndex());
       return false;

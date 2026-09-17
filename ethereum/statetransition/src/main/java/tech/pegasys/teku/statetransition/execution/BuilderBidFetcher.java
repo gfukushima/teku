@@ -134,7 +134,8 @@ public class BuilderBidFetcher {
       return bidValidator.validateBid(bid, state, parentHash, parentRoot, builderEntry);
     } catch (final Exception ex) {
       LOG.warn(
-          "Exception occurred while validating a bid from builder {}",
+          "Exception occurred while validating a bid from {} (builder {})",
+          builderEntry.getUrl(),
           bid.getMessage().getBuilderIndex(),
           ex);
       return false;
@@ -159,7 +160,10 @@ public class BuilderBidFetcher {
           bid.getMessage().getExecutionPayment().min(maxExecutionPayment);
       return bid.getMessage().getValue().plus(trustedExecutionPayment);
     } catch (final ArithmeticException ex) {
-      LOG.warn("Failed to compute bid value for a bid coming from {}", url);
+      LOG.warn(
+          "Failed to compute bid value for a bid coming from {} (builder {})",
+          url,
+          bid.getMessage().getBuilderIndex());
       return UInt64.ZERO;
     }
   }
