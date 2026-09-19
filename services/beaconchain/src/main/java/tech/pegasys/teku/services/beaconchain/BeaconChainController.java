@@ -1028,8 +1028,8 @@ public class BeaconChainController extends Service implements BeaconChainControl
           beaconConfig
               .executionPayloadBidCircuitBreakerFactory()
               .create(recentChainData::getForkChoiceStrategy);
-      stakedBuilderClientProvider = new OkHttpStakedBuilderClientProvider(spec, beaconAsyncRunner);
-      final BuilderBidValidator bidValidator =
+      stakedBuilderClientProvider = new OkHttpStakedBuilderClientProvider(spec);
+     final BuilderBidValidator bidValidator =
           new BuilderBidValidator(
               spec, proposerPreferencesManager, recentChainData, gossipValidationHelper);
       final BuilderBidFetcher builderBidFetcher =
@@ -1993,7 +1993,8 @@ public class BeaconChainController extends Service implements BeaconChainControl
             executionPayloadPublisher,
             executionPayloadBidManager,
             proposerPreferencesManager,
-            executionProofManager);
+            executionProofManager,
+            stakedBuilderClientProvider);
 
     eventChannels
         .subscribe(SlotEventsChannel.class, activeValidatorTracker)
