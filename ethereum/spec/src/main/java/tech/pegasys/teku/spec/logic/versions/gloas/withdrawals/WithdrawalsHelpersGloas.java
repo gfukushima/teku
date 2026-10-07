@@ -125,8 +125,6 @@ public class WithdrawalsHelpersGloas extends WithdrawalsHelpersElectra {
         break;
       }
       final Builder builder = builders.get(builderIndex.intValue());
-      // Withdrawals already queued for this builder, either from builder_pending_withdrawals or
-      // from an earlier iteration of this sweep, are not available to withdraw again.
       final UInt64 balance =
           getBuilderBalanceAfterWithdrawals(stateGloas, builderIndex, withdrawals);
       if (builder.getWithdrawableEpoch().isLessThanOrEqualTo(epoch)
@@ -150,9 +148,9 @@ public class WithdrawalsHelpersGloas extends WithdrawalsHelpersElectra {
   // get_builder_balance_after_withdrawals
   private UInt64 getBuilderBalanceAfterWithdrawals(
       final BeaconStateGloas state, final UInt64 builderIndex, final List<Withdrawal> withdrawals) {
-    final UInt64 withdrawn =
-        WithdrawalsHelpers.getTotalWithdrawn(
-            withdrawals, miscHelpersGloas.convertBuilderIndexToValidatorIndex(builderIndex));
+    final UInt64 validatorIndex =
+        miscHelpersGloas.convertBuilderIndexToValidatorIndex(builderIndex);
+    final UInt64 withdrawn = WithdrawalsHelpers.getTotalWithdrawn(withdrawals, validatorIndex);
     return state.getBuilders().get(builderIndex.intValue()).getBalance().minusMinZero(withdrawn);
   }
 
