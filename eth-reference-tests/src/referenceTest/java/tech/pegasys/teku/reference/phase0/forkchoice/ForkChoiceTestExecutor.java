@@ -128,6 +128,7 @@ public class ForkChoiceTestExecutor implements TestExecutor {
   public static final ImmutableMap<String, TestExecutor> FORK_CHOICE_TEST_TYPES =
       ImmutableMap.<String, TestExecutor>builder()
           .put("fork_choice/get_head", new ForkChoiceTestExecutor())
+          .put("fork_choice/filter_node_tree_variants", new ForkChoiceTestExecutor())
           .put("fork_choice/ex_ante", new ForkChoiceTestExecutor())
           .put("fork_choice/reorg", new ForkChoiceTestExecutor())
           .put("fork_choice/on_block", new ForkChoiceTestExecutor())
