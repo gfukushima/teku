@@ -538,21 +538,14 @@ def slashingProtectionInterchangeRefTestDownloadDir = "${buildDir}/slashingProte
 // Reference test tarballs are converted into <config>.zip archives that the tests read directly
 // through the JDK zip filesystem (see ReferenceTestArchiveConverter); nothing is expanded on disk.
 ext.refTestArchivesDir = "${refTestDownloadDir}/archives"
-// comptests.tar.gz ships only with some tagged consensus-specs releases: the nightly
-// vector-generation workflow never produces it, and v1.7.0-beta.3 dropped the asset entirely.
-// Restore this to `!nightly` once a pinned release publishes it again; the fork-choice-compliance
-// conversion, download and finder wiring all stay in place, so no other change is needed.
-def compTestsAvailable = false
 ext.refTestTarballs = [
 	general: "${refTestDownloadDir}/general.tar.gz",
 	minimal: "${refTestDownloadDir}/minimal.tar.gz",
 	mainnet: "${refTestDownloadDir}/mainnet.tar.gz",
 	bls: "${blsRefTestDownloadDir}/bls_tests_yaml.tar.gz",
 	'slashing-protection-interchange': "${slashingProtectionInterchangeRefTestDownloadDir}/slashing-protection-interchange-tests.tar.gz",
+	'fork-choice-compliance': "${compTestDownloadDir}/comptests.tar.gz",
 ]
-if (compTestsAvailable) {
-	ext.refTestTarballs['fork-choice-compliance'] = "${compTestDownloadDir}/comptests.tar.gz"
-}
 
 def downloadFile(String url, String token, File outputFile) {
 	println "Download ${outputFile.getName()} (${url})"
@@ -668,8 +661,10 @@ tasks.register('downloadSlashingProtectionInterchangeRefTests', Download) {
 	overwrite false
 }
 
+// comptests.tar.gz is only published alongside tagged consensus-specs releases (not the nightly
+// vector-generation workflow), so it is skipped for nightly builds.
 tasks.register('downloadCompTests', Download) {
-	onlyIf { compTestsAvailable }
+	onlyIf { !nightly }
 	src([
 		"${refTestBaseUrl}/${refTestVersion}/comptests.tar.gz"
 	])
@@ -678,10 +673,7 @@ tasks.register('downloadCompTests', Download) {
 }
 
 tasks.register('downloadRefTests') {
-	dependsOn downloadEthRefTests, downloadBlsRefTests, downloadSlashingProtectionInterchangeRefTests
-	if (compTestsAvailable) {
-		dependsOn downloadCompTests
-	}
+	dependsOn downloadEthRefTests, downloadBlsRefTests, downloadSlashingProtectionInterchangeRefTests, downloadCompTests
 }
 
 tasks.register('deploy') {}
