@@ -1608,7 +1608,9 @@
     </spec>
 
 - name: compute_slot_at_time#phase0
-  sources: []
+  sources:
+    - file: ethereum/spec/src/main/java/tech/pegasys/teku/spec/logic/common/helpers/MiscHelpers.java
+      search: public UInt64 computeSlotAtTime(final UInt64 genesisTime, final UInt64 currentTime) {
   spec: |
     <spec fn="compute_slot_at_time" fork="phase0" hash="95588197">
     def compute_slot_at_time(genesis_time: Uint64, time: Uint64) -> Slot:
@@ -1621,7 +1623,9 @@
     </spec>
 
 - name: compute_slot_at_time_ms#phase0
-  sources: []
+  sources:
+    - file: ethereum/spec/src/main/java/tech/pegasys/teku/spec/logic/common/helpers/MiscHelpers.java
+      search: public UInt64 computeSlotAtTimeMillis(
   spec: |
     <spec fn="compute_slot_at_time_ms" fork="phase0" hash="81a60052">
     def compute_slot_at_time_ms(genesis_time_ms: Uint64, time_ms: Uint64) -> Slot:
@@ -4346,7 +4350,11 @@
     </spec>
 
 - name: get_filtered_node_tree#gloas
-  sources: []
+  sources:
+    - file: storage/src/main/java/tech/pegasys/teku/storage/protoarray/ProtoArray.java
+      search: public ProtoNode findOptimisticHead(
+    - file: storage/src/main/java/tech/pegasys/teku/storage/protoarray/ProtoArray.java
+      search: public boolean nodeIsViableForHead(final ProtoNode node) {
   spec: |
     <spec fn="get_filtered_node_tree" fork="gloas" hash="5e59710d">
     def get_filtered_node_tree(store: Store) -> Sequence[ForkChoiceNode]:
@@ -5109,7 +5117,7 @@
 - name: get_node_support_between_slots#phase0
   sources:
     - file: ethereum/statetransition/src/main/java/tech/pegasys/teku/statetransition/forkchoice/fastconfirmation/FastConfirmationCalculator.java
-      search: UInt64 getBlockSupportBetweenSlots(
+      search: UInt64 getNodeSupportBetweenSlots(
   spec: |
     <spec fn="get_node_support_between_slots" fork="phase0" hash="7e3e86fb">
     def get_node_support_between_slots(
@@ -8364,7 +8372,9 @@
     </spec>
 
 - name: milliseconds_to_seconds#phase0
-  sources: []
+  sources:
+    - file: infrastructure/time/src/main/java/tech/pegasys/teku/infrastructure/time/TimeUtilities.java
+      search: public static UInt64 millisToSeconds(final UInt64 timeInMillis) {
   spec: |
     <spec fn="milliseconds_to_seconds" fork="phase0" hash="25f94fde">
     def milliseconds_to_seconds(milliseconds: Uint64) -> Uint64:
