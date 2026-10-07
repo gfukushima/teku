@@ -3170,7 +3170,9 @@
     </spec>
 
 - name: get_builder_balance_after_withdrawals#gloas
-  sources: []
+  sources:
+    - file: ethereum/spec/src/main/java/tech/pegasys/teku/spec/logic/versions/gloas/withdrawals/WithdrawalsHelpersGloas.java
+      search: private UInt64 getBuilderBalanceAfterWithdrawals(
   spec: |
     <spec fn="get_builder_balance_after_withdrawals" fork="gloas" hash="517947a4">
     def get_builder_balance_after_withdrawals(
