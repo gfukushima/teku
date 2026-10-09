@@ -27,6 +27,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Supplier;
 import org.apache.tuweni.bytes.Bytes32;
 import org.opentest4j.TestAbortedException;
 import tech.pegasys.teku.bls.BLSSignatureVerifier;
@@ -194,18 +195,28 @@ public class GossipBeaconAttestationTestExecutor implements TestExecutor {
       }
     }
 
+    // Use a mutable time reference so the gossip validator sees each message's current_time_ms even
+    // when that time is earlier than the store's time (which only moves forward). Blocks are
+    // imported after their slot starts, while a message may be validated just before that slot
+    // starts, and the spec does not require message times to be monotonic.
+    final UInt64[] validationTimeMs = {UInt64.ZERO};
     final AttestationValidator attestationValidator =
         new AttestationValidator(
             spec,
             AsyncBLSSignatureVerifier.wrap(blsVerifier),
             createGossipValidationHelper(
-                spec, ctx.recentChainData, ctx.metricsSystem, customFinalizedCheckpoint),
+                spec,
+                ctx.recentChainData,
+                ctx.metricsSystem,
+                customFinalizedCheckpoint,
+                () -> validationTimeMs[0]),
             invalidBlockRoots,
             blockRootsWithInvalidExecutionPayload);
 
     for (final GossipBeaconAttestationMetaData.Message message : metaData.getMessages()) {
       // Advance clock to message arrival time
       final UInt64 messageTimeMs = UInt64.valueOf(message.getCurrentTimeMs());
+      validationTimeMs[0] = messageTimeMs;
       ctx.forkChoice.onTick(messageTimeMs, Optional.empty());
 
       final Attestation attestation =
@@ -237,23 +248,27 @@ public class GossipBeaconAttestationTestExecutor implements TestExecutor {
       final Spec spec,
       final RecentChainData recentChainData,
       final StubMetricsSystem metricsSystem,
-      final Optional<Checkpoint> finalizedCheckpointOverride) {
-    return finalizedCheckpointOverride
-        .<GossipValidationHelper>map(
-            finalizedCheckpoint ->
-                new GossipValidationHelper(spec, recentChainData, metricsSystem) {
-                  @Override
-                  public boolean currentFinalizedCheckpointIsAncestorOfAttestationBlock(
-                      final Bytes32 blockRoot) {
-                    return spec.getAncestor(
-                            getForkChoiceStrategy(),
-                            blockRoot,
-                            finalizedCheckpoint.getEpochStartSlot(spec))
-                        .map(ancestorRoot -> ancestorRoot.equals(finalizedCheckpoint.getRoot()))
-                        .orElse(false);
-                  }
-                })
-        .orElseGet(() -> new GossipValidationHelper(spec, recentChainData, metricsSystem));
+      final Optional<Checkpoint> finalizedCheckpointOverride,
+      final Supplier<UInt64> validationTimeMs) {
+    return new GossipValidationHelper(spec, recentChainData, metricsSystem) {
+      @Override
+      public UInt64 getCurrentTimeMillis() {
+        return validationTimeMs.get();
+      }
+
+      @Override
+      public boolean currentFinalizedCheckpointIsAncestorOfAttestationBlock(
+          final Bytes32 blockRoot) {
+        if (finalizedCheckpointOverride.isEmpty()) {
+          return super.currentFinalizedCheckpointIsAncestorOfAttestationBlock(blockRoot);
+        }
+        final Checkpoint finalizedCheckpoint = finalizedCheckpointOverride.get();
+        return spec.getAncestor(
+                getForkChoiceStrategy(), blockRoot, finalizedCheckpoint.getEpochStartSlot(spec))
+            .map(ancestorRoot -> ancestorRoot.equals(finalizedCheckpoint.getRoot()))
+            .orElse(false);
+      }
+    };
   }
 
   @SuppressWarnings("unused")

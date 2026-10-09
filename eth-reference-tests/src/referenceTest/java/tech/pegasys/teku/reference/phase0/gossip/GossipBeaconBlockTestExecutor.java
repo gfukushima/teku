@@ -194,10 +194,20 @@ public class GossipBeaconBlockTestExecutor implements TestExecutor {
       }
     }
 
+    // Use a mutable time reference so the gossip validator sees each message's current_time_ms even
+    // when that time is earlier than the store's time (which only moves forward). Blocks are
+    // imported after their slot starts, while a message may be validated just before that slot
+    // starts, and the spec does not require message times to be monotonic.
+    final UInt64[] validationTimeMs = {UInt64.ZERO};
     final BlockGossipValidator blockGossipValidator =
         new BlockGossipValidator(
             spec,
-            new GossipValidationHelper(spec, ctx.recentChainData, ctx.metricsSystem),
+            new GossipValidationHelper(spec, ctx.recentChainData, ctx.metricsSystem) {
+              @Override
+              public UInt64 getCurrentTimeMillis() {
+                return validationTimeMs[0];
+              }
+            },
             new ReceivedBlockEventsChannel() {
               @Override
               public void onBlockValidated(final SignedBeaconBlock block) {}
@@ -210,6 +220,7 @@ public class GossipBeaconBlockTestExecutor implements TestExecutor {
     for (final GossipBeaconBlockMetaData.Message message : metaData.getMessages()) {
       // Advance clock to message arrival time
       final UInt64 messageTimeMs = UInt64.valueOf(message.getCurrentTimeMs());
+      validationTimeMs[0] = messageTimeMs;
       ctx.forkChoice.onTick(messageTimeMs, Optional.empty());
 
       final SignedBeaconBlock block =
