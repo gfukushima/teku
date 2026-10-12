@@ -12,5 +12,6 @@
  - Scheduled Gloas fork for the HOODI network at epoch 132352, which is 26 Oct 2026 17:42:48 UTC.
 
 ### Bug Fixes
+ - `ExecutionPayloadEnvelopesByRange` only serves envelopes of payloads that are part of the chain defined by the current head, as required by the spec. Envelopes of finalized blocks whose payload the chain did not build on are no longer retained, and such envelopes received while syncing are dropped instead of imported. [#11246](https://github.com/Consensys-Incorporated/teku/issues/11246)
  - Discovered peers whose node record advertises only a QUIC address are no longer ignored. Nodes with QUIC disabled skip them instead of dialing an address they do not have. [#11420](https://github.com/Consensys-Incorporated/teku/issues/11420)
  - Nodes with TCP disabled no longer dial, or fall back to, a discovered peer's TCP address; such candidates are skipped before peer selection and counted in the new `peer_candidate_count_total` metric. [#11421](https://github.com/Consensys-Incorporated/teku/issues/11421)

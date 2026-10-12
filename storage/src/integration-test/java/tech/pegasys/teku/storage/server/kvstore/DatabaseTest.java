@@ -782,6 +782,73 @@ public class DatabaseTest {
   }
 
   @TestTemplate
+  public void shouldDeleteBlindedExecutionPayloadEnvelopeOfFinalizedBlockWhosePayloadWasNotBuiltOn(
+      final DatabaseContext context) throws IOException {
+    setupWithSpec(TestSpecFactory.createMinimalGloas(), BLSKeyGenerator.generateKeyPairs(8));
+    initialize(context);
+    final SignedBlockAndState blockAndState = chainBuilder.generateNextBlock();
+    final SignedBlindedExecutionPayloadEnvelope signedBlindedExecutionPayloadEnvelope =
+        getSignedBlindedExecutionPayloadEnvelope(blockAndState);
+    final FinalizedChainData finalizedChainData =
+        FinalizedChainData.builder()
+            .latestFinalized(AnchorPoint.fromInitialBlockAndState(spec, blockAndState))
+            .finalizedChildAndParent(
+                genesisBlockAndState.getRoot(), genesisBlockAndState.getParentRoot())
+            // The finalized chain built on the EMPTY variant of the block
+            .orphanedExecutionPayloadRoots(Set.of(blockAndState.getRoot()))
+            .build();
+
+    // Store envelope
+    database.update(
+        new StorageUpdate(
+            Optional.empty(),
+            Optional.empty(),
+            Optional.empty(),
+            Optional.empty(),
+            Map.of(),
+            Map.of(),
+            Map.of(blockAndState.getRoot(), signedBlindedExecutionPayloadEnvelope),
+            Map.of(),
+            Optional.empty(),
+            Map.of(),
+            Map.of(),
+            false,
+            Optional.empty(),
+            Optional.empty(),
+            Optional.empty(),
+            true,
+            false,
+            true));
+    assertThat(database.getBlindedExecutionPayloadEnvelope(blockAndState.getRoot()))
+        .contains(signedBlindedExecutionPayloadEnvelope);
+
+    // Finalize. The envelope of a canonical block whose payload is not part of the chain is
+    // deleted.
+    database.update(
+        new StorageUpdate(
+            Optional.empty(),
+            Optional.of(finalizedChainData),
+            Optional.empty(),
+            Optional.empty(),
+            Map.of(),
+            Map.of(),
+            Map.of(),
+            Map.of(),
+            Optional.empty(),
+            Map.of(genesisBlockAndState.getRoot(), genesisBlockAndState.getSlot()),
+            Map.of(),
+            false,
+            Optional.empty(),
+            Optional.empty(),
+            Optional.empty(),
+            true,
+            false,
+            true));
+
+    assertThat(database.getBlindedExecutionPayloadEnvelope(blockAndState.getRoot())).isEmpty();
+  }
+
+  @TestTemplate
   public void shouldSkipMissingBlindedExecutionPayloadEnvelope(final DatabaseContext context)
       throws IOException {
     setupWithSpec(TestSpecFactory.createMinimalGloas(), BLSKeyGenerator.generateKeyPairs(8));

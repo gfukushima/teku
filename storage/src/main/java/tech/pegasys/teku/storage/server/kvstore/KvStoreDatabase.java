@@ -1591,11 +1591,16 @@ public class KvStoreDatabase implements Database {
             update.getOptimisticTransitionBlockRoot());
 
     if (update.isExecutionPayloadEnvelopesEnabled()) {
-      final Set<Bytes32> nonCanonicalPrunedRoots =
-          update.getDeletedHotBlocks().keySet().stream()
-              .filter(root -> !update.getFinalizedChildToParentMap().containsKey(root))
+      // Envelopes are dropped for pruned non-canonical blocks and for finalized blocks whose
+      // payload the finalized chain did not build on
+      final Set<Bytes32> prunedExecutionPayloadRoots =
+          Stream.concat(
+                  update.getDeletedHotBlocks().keySet().stream()
+                      .filter(root -> !update.getFinalizedChildToParentMap().containsKey(root)),
+                  update.getOrphanedExecutionPayloadRoots().stream())
               .collect(Collectors.toSet());
-      updateBlindedExecutionPayloads(update.getBlindedExecutionPayloads(), nonCanonicalPrunedRoots);
+      updateBlindedExecutionPayloads(
+          update.getBlindedExecutionPayloads(), prunedExecutionPayloadRoots);
     }
 
     if (update.isBlobSidecarsEnabled()) {
