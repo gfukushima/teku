@@ -23,7 +23,6 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 import org.apache.tuweni.bytes.Bytes32;
 import tech.pegasys.teku.infrastructure.unsigned.UInt64;
 import tech.pegasys.teku.spec.datastructures.blobs.versions.deneb.BlobSidecar;
@@ -170,12 +169,6 @@ public class StorageUpdate {
 
   public Map<Bytes32, BeaconState> getFinalizedStates() {
     return finalizedChainData.map(FinalizedChainData::getStates).orElse(Collections.emptyMap());
-  }
-
-  public Set<Bytes32> getOrphanedExecutionPayloadRoots() {
-    return finalizedChainData
-        .map(FinalizedChainData::getOrphanedExecutionPayloadRoots)
-        .orElse(Collections.emptySet());
   }
 
   public Optional<BeaconState> getLatestFinalizedState() {

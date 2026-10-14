@@ -18,10 +18,8 @@ import static com.google.common.base.Preconditions.checkState;
 
 import java.util.Collection;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 import org.apache.tuweni.bytes.Bytes32;
 import tech.pegasys.teku.spec.datastructures.blocks.BlockAndCheckpoints;
 import tech.pegasys.teku.spec.datastructures.blocks.SignedBeaconBlock;
@@ -35,21 +33,18 @@ public class FinalizedChainData {
   private final Map<Bytes32, SignedBeaconBlock> finalizedBlocks;
   private final Map<Bytes32, BeaconState> finalizedStates;
   private final Optional<BlockAndCheckpoints> finalizedExecutionPayloadBoundaryBlock;
-  private final Set<Bytes32> orphanedExecutionPayloadRoots;
 
   private FinalizedChainData(
       final AnchorPoint latestFinalized,
       final Map<Bytes32, Bytes32> finalizedChildToParentMap,
       final Map<Bytes32, SignedBeaconBlock> finalizedBlocks,
       final Map<Bytes32, BeaconState> finalizedStates,
-      final Optional<BlockAndCheckpoints> finalizedExecutionPayloadBoundaryBlock,
-      final Set<Bytes32> orphanedExecutionPayloadRoots) {
+      final Optional<BlockAndCheckpoints> finalizedExecutionPayloadBoundaryBlock) {
     this.latestFinalized = latestFinalized;
     this.finalizedChildToParentMap = finalizedChildToParentMap;
     this.finalizedBlocks = finalizedBlocks;
     this.finalizedStates = finalizedStates;
     this.finalizedExecutionPayloadBoundaryBlock = finalizedExecutionPayloadBoundaryBlock;
-    this.orphanedExecutionPayloadRoots = orphanedExecutionPayloadRoots;
   }
 
   public static Builder builder() {
@@ -95,22 +90,12 @@ public class FinalizedChainData {
     return finalizedExecutionPayloadBoundaryBlock;
   }
 
-  /**
-   * Roots of finalized blocks whose execution payload is not part of the finalized chain: the next
-   * finalized block built on their EMPTY variant. Their execution payload envelopes must not be
-   * retained.
-   */
-  public Set<Bytes32> getOrphanedExecutionPayloadRoots() {
-    return orphanedExecutionPayloadRoots;
-  }
-
   public static class Builder {
     private AnchorPoint latestFinalized;
     private final Map<Bytes32, Bytes32> finalizedChildToParentMap = new HashMap<>();
     private final Map<Bytes32, SignedBeaconBlock> finalizedBlocks = new HashMap<>();
     private final Map<Bytes32, BeaconState> finalizedStates = new HashMap<>();
     private Optional<BlockAndCheckpoints> finalizedExecutionPayloadBoundaryBlock = Optional.empty();
-    private final Set<Bytes32> orphanedExecutionPayloadRoots = new HashSet<>();
 
     public FinalizedChainData build() {
       assertValid();
@@ -119,14 +104,7 @@ public class FinalizedChainData {
           finalizedChildToParentMap,
           finalizedBlocks,
           finalizedStates,
-          finalizedExecutionPayloadBoundaryBlock,
-          orphanedExecutionPayloadRoots);
-    }
-
-    public Builder orphanedExecutionPayloadRoots(final Set<Bytes32> orphanedExecutionPayloadRoots) {
-      checkNotNull(orphanedExecutionPayloadRoots);
-      this.orphanedExecutionPayloadRoots.addAll(orphanedExecutionPayloadRoots);
-      return this;
+          finalizedExecutionPayloadBoundaryBlock);
     }
 
     private void assertValid() {

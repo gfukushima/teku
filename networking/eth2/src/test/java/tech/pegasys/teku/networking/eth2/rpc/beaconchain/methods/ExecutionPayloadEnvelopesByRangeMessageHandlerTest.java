@@ -440,6 +440,33 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandlerTest {
     verify(peer).adjustExecutionPayloadEnvelopesRequest(any(), eq(4L));
   }
 
+  @Test
+  public void onIncomingMessage_shouldServeRangeStraddlingFinalizedBlockFromBothSources() {
+    final List<SignedExecutionPayloadEnvelope> allEnvelopes = buildChain(5);
+    // The finalized block is at slot 3 and the chain built on its payload. Slots before it come
+    // from the finalized database, the finalized block and its descendants from the head chain.
+    final UInt64 finalizedSlot = UInt64.valueOf(3);
+    when(combinedChainDataClient.getFinalizedBlockSlot()).thenReturn(Optional.of(finalizedSlot));
+    stubHeadChainNodes(finalizedSlot, __ -> PAYLOAD_STATUS_FULL);
+    stubFinalizedBlockLookup();
+
+    final ExecutionPayloadEnvelopesByRangeRequestMessage message =
+        new ExecutionPayloadEnvelopesByRangeRequestMessage(UInt64.ONE, UInt64.valueOf(5));
+    handler.onIncomingMessage(PROTOCOL_ID, peer, message, callback);
+
+    verify(callback, times(5)).respond(any());
+    for (final SignedExecutionPayloadEnvelope envelope : allEnvelopes) {
+      verify(callback).respond(envelope);
+      if (envelope.getSlot().isLessThan(finalizedSlot)) {
+        verify(combinedChainDataClient).getBlockAtSlotExact(envelope.getSlot());
+      } else {
+        verify(combinedChainDataClient, never()).getBlockAtSlotExact(envelope.getSlot());
+      }
+    }
+    verify(callback).completeSuccessfully();
+    verify(peer, never()).adjustExecutionPayloadEnvelopesRequest(any(), anyLong());
+  }
+
   private void stubCurrentEpoch(final int epochsAfterMinEpochsForBlockRequests) {
     when(recentChainData.getCurrentEpoch())
         .thenReturn(
@@ -454,12 +481,23 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandlerTest {
    */
   private void stubHeadChainNodes(
       final Function<UInt64, ForkChoicePayloadStatus> payloadStatusBySlot) {
+    stubHeadChainNodes(ZERO, payloadStatusBySlot);
+  }
+
+  /**
+   * Stubs the head chain nodes returned for the requested range. Blocks before {@code
+   * firstSlotInForkChoice} have been pruned from fork choice and are not returned.
+   */
+  private void stubHeadChainNodes(
+      final UInt64 firstSlotInForkChoice,
+      final Function<UInt64, ForkChoicePayloadStatus> payloadStatusBySlot) {
     doAnswer(
             i -> {
               final UInt64 startSlot = i.getArgument(0);
               final UInt64 count = i.getArgument(1);
               return chainBuilder
-                  .streamBlocksAndStates(startSlot, startSlot.plus(count).minusMinZero(1))
+                  .streamBlocksAndStates(
+                      startSlot.max(firstSlotInForkChoice), startSlot.plus(count).minusMinZero(1))
                   .collect(
                       Collectors.toMap(
                           blockAndState -> blockAndState.getBlock().getSlot(),
@@ -478,6 +516,10 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandlerTest {
     // The head is the finalized block
     when(combinedChainDataClient.getFinalizedBlockSlot()).thenReturn(Optional.of(headSlot));
     stubChainHead(headSlot);
+    stubFinalizedBlockLookup();
+  }
+
+  private void stubFinalizedBlockLookup() {
     when(combinedChainDataClient.getBlockAtSlotExact(any()))
         .thenAnswer(
             invocationOnMock -> {

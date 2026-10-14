@@ -530,27 +530,28 @@ public class SyncSourceBatch implements Batch {
     for (int i = 0; i < newBlocks.size(); i++) {
       final SignedBeaconBlock newBlock = newBlocks.get(i);
       if (i == 0 && lastBlock.isPresent()) {
-        final SignedBeaconBlock lastBlockOfPreviousRequest = lastBlock.get();
-        if (executionPayloadsByBlockRoot.containsKey(lastBlockOfPreviousRequest.getRoot())
-            && !isParentBlockFull(lastBlockOfPreviousRequest, newBlock)) {
-          logExecutionPayloadNotBuiltOn(lastBlockOfPreviousRequest);
-          executionPayloadsByBlockRoot.remove(lastBlockOfPreviousRequest.getRoot());
-        }
+        dropExecutionPayloadIfNotBuiltOn(executionPayloadsByBlockRoot, lastBlock.get(), newBlock);
       }
-      if (i != newBlocks.size() - 1
-          && newExecutionPayloadsByBlockRoot.containsKey(newBlock.getRoot())
-          && !isParentBlockFull(newBlock, newBlocks.get(i + 1))) {
-        logExecutionPayloadNotBuiltOn(newBlock);
-        newExecutionPayloadsByBlockRoot.remove(newBlock.getRoot());
+      if (i != newBlocks.size() - 1) {
+        dropExecutionPayloadIfNotBuiltOn(
+            newExecutionPayloadsByBlockRoot, newBlock, newBlocks.get(i + 1));
       }
     }
   }
 
-  private void logExecutionPayloadNotBuiltOn(final SignedBeaconBlock block) {
+  private void dropExecutionPayloadIfNotBuiltOn(
+      final Map<Bytes32, SignedExecutionPayloadEnvelope> executionPayloadsByBlockRoot,
+      final SignedBeaconBlock block,
+      final SignedBeaconBlock nextBlock) {
+    if (!executionPayloadsByBlockRoot.containsKey(block.getRoot())
+        || isParentBlockFull(block, nextBlock)) {
+      return;
+    }
     LOG.debug(
         "Dropping execution payload envelope for slot {} and root {} because the next block did not build on it",
         block.getSlot(),
         block.getRoot());
+    executionPayloadsByBlockRoot.remove(block.getRoot());
   }
 
   private void logBatchInvalidBecauseOfExecutionPayloadMissing(final SignedBeaconBlock block) {

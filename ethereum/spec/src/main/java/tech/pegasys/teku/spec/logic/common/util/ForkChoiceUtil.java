@@ -168,6 +168,9 @@ public class ForkChoiceUtil {
       final UInt64 startSlot,
       final UInt64 count) {
     final NavigableMap<UInt64, ForkChoiceNode> nodes = new TreeMap<>();
+    if (count.isZero()) {
+      return nodes;
+    }
     // minus(ONE) because the start block is included
     final UInt64 endSlot = startSlot.plus(count).minusMinZero(1);
     Optional<ForkChoiceNode> currentNode = Optional.of(node);

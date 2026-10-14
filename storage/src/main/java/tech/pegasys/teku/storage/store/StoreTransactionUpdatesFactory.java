@@ -17,13 +17,11 @@ import static tech.pegasys.teku.spec.datastructures.forkchoice.ForkChoicePayload
 
 import java.util.Comparator;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -42,7 +40,6 @@ import tech.pegasys.teku.spec.datastructures.epbs.versions.gloas.SignedExecution
 import tech.pegasys.teku.spec.datastructures.state.AnchorPoint;
 import tech.pegasys.teku.spec.datastructures.state.Checkpoint;
 import tech.pegasys.teku.spec.datastructures.state.beaconstate.BeaconState;
-import tech.pegasys.teku.spec.logic.versions.gloas.helpers.MiscHelpersGloas;
 import tech.pegasys.teku.storage.api.FinalizedChainData;
 import tech.pegasys.teku.storage.protoarray.ExecutionPayloadUpdate;
 
@@ -127,8 +124,6 @@ class StoreTransactionUpdatesFactory {
     final FinalizedChainData.Builder finalizedChainDataBuilder = FinalizedChainData.builder();
     createFinalizedExecutionPayloadBoundaryBlock()
         .ifPresent(finalizedChainDataBuilder::finalizedExecutionPayloadBoundaryBlock);
-    finalizedChainDataBuilder.orphanedExecutionPayloadRoots(
-        findOrphanedExecutionPayloadRoots(finalizedChildToParent, finalizedBlocks));
     final boolean optimisticTransitionBlockRootSet;
     final Optional<Bytes32> optimisticTransitionBlockRoot;
     if (tx.clearFinalizedOptimisticTransitionPayload) {
@@ -295,38 +290,6 @@ class StoreTransactionUpdatesFactory {
         spec.supportsExecutionPayloadEnvelopes(),
         hotExecutionPayloads,
         blindedExecutionPayloads);
-  }
-
-  /**
-   * Finds the finalized blocks whose execution payload is not part of the finalized chain: their
-   * finalized child built on their EMPTY variant, so their envelope must not be retained. Only
-   * blocks with a finalized child can be resolved; the newly finalized block itself is resolved by
-   * the finalization that finalizes its child.
-   */
-  private Set<Bytes32> findOrphanedExecutionPayloadRoots(
-      final Map<Bytes32, Bytes32> finalizedChildToParent,
-      final Set<SignedBeaconBlock> finalizedBlocks) {
-    if (!spec.supportsExecutionPayloadEnvelopes()) {
-      return Set.of();
-    }
-    final Map<Bytes32, SignedBeaconBlock> finalizedBlocksByRoot =
-        finalizedBlocks.stream()
-            .collect(Collectors.toMap(SignedBeaconBlock::getRoot, Function.identity()));
-    final Set<Bytes32> orphanedExecutionPayloadRoots = new HashSet<>();
-    finalizedChildToParent.forEach(
-        (childRoot, parentRoot) -> {
-          final SignedBeaconBlock child = finalizedBlocksByRoot.get(childRoot);
-          final SignedBeaconBlock parent = finalizedBlocksByRoot.get(parentRoot);
-          if (child == null
-              || parent == null
-              || parent.getMessage().getBody().toVersionGloas().isEmpty()) {
-            return;
-          }
-          if (!MiscHelpersGloas.isParentBlockFull(parent, child)) {
-            orphanedExecutionPayloadRoots.add(parentRoot);
-          }
-        });
-    return orphanedExecutionPayloadRoots;
   }
 
   private Map<Bytes32, SignedBlindedExecutionPayloadEnvelope> createBlindedExecutionPayloads() {

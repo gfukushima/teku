@@ -106,6 +106,7 @@ import tech.pegasys.teku.storage.api.StoredBlockMetadata;
 import tech.pegasys.teku.storage.api.StoredLightClientUpdate;
 import tech.pegasys.teku.storage.api.WeakSubjectivityUpdate;
 import tech.pegasys.teku.storage.archive.filesystem.FileSystemBlobSidecarsArchiver;
+import tech.pegasys.teku.storage.client.ChainUpdater;
 import tech.pegasys.teku.storage.client.RecentChainData;
 import tech.pegasys.teku.storage.server.Database;
 import tech.pegasys.teku.storage.server.DatabaseContext;
@@ -785,67 +786,89 @@ public class DatabaseTest {
   public void shouldDeleteBlindedExecutionPayloadEnvelopeOfFinalizedBlockWhosePayloadWasNotBuiltOn(
       final DatabaseContext context) throws IOException {
     setupWithSpec(TestSpecFactory.createMinimalGloas(), BLSKeyGenerator.generateKeyPairs(8));
-    initialize(context);
-    final SignedBlockAndState blockAndState = chainBuilder.generateNextBlock();
-    final SignedBlindedExecutionPayloadEnvelope signedBlindedExecutionPayloadEnvelope =
-        getSignedBlindedExecutionPayloadEnvelope(blockAndState);
-    final FinalizedChainData finalizedChainData =
-        FinalizedChainData.builder()
-            .latestFinalized(AnchorPoint.fromInitialBlockAndState(spec, blockAndState))
-            .finalizedChildAndParent(
-                genesisBlockAndState.getRoot(), genesisBlockAndState.getParentRoot())
-            // The finalized chain built on the EMPTY variant of the block
-            .orphanedExecutionPayloadRoots(Set.of(blockAndState.getRoot()))
-            .build();
+    // A block cache of a single block makes finalized block bodies come from the database, as on a
+    // live network where finalization lags block import by far more than the cache size
+    createStorageSystem(
+        context, StateStorageMode.PRUNE, StoreConfig.builder().blockCacheSize(1).build(), false);
+    // Use the storage system's own chain builder, whose keys match the mock-start validators
+    final ChainBuilder gloasChainBuilder = storageSystem.chainBuilder();
+    recentChainData.initializeFromGenesis(gloasChainBuilder.generateGenesis().getState(), ZERO);
+    final ChainUpdater chainUpdater = storageSystem.chainUpdater();
 
-    // Store envelope
-    database.update(
-        new StorageUpdate(
-            Optional.empty(),
-            Optional.empty(),
-            Optional.empty(),
-            Optional.empty(),
-            Map.of(),
-            Map.of(),
-            Map.of(blockAndState.getRoot(), signedBlindedExecutionPayloadEnvelope),
-            Map.of(),
-            Optional.empty(),
-            Map.of(),
-            Map.of(),
-            false,
-            Optional.empty(),
-            Optional.empty(),
-            Optional.empty(),
-            true,
-            false,
-            true));
-    assertThat(database.getBlindedExecutionPayloadEnvelope(blockAndState.getRoot()))
-        .contains(signedBlindedExecutionPayloadEnvelope);
+    // The block at slot 4 builds on the EMPTY variant of the block at slot 3, so the payload of
+    // slot 3 is not part of the chain even though its envelope was stored
+    final UInt64 emptyPayloadSlot = UInt64.valueOf(3);
+    final UInt64 epoch1Slot = spec.computeStartSlotAtEpoch(ONE);
+    advanceGloasChain(chainUpdater, ONE, epoch1Slot, emptyPayloadSlot.increment());
+    final Bytes32 emptyPayloadBlockRoot =
+        gloasChainBuilder.getBlockAtSlot(emptyPayloadSlot).getRoot();
+    assertThat(database.getBlindedExecutionPayloadEnvelope(emptyPayloadBlockRoot)).isPresent();
 
-    // Finalize. The envelope of a canonical block whose payload is not part of the chain is
-    // deleted.
-    database.update(
-        new StorageUpdate(
-            Optional.empty(),
-            Optional.of(finalizedChainData),
-            Optional.empty(),
-            Optional.empty(),
-            Map.of(),
-            Map.of(),
-            Map.of(),
-            Map.of(),
-            Optional.empty(),
-            Map.of(genesisBlockAndState.getRoot(), genesisBlockAndState.getSlot()),
-            Map.of(),
-            false,
-            Optional.empty(),
-            Optional.empty(),
-            Optional.empty(),
-            true,
-            false,
-            true));
+    chainUpdater.finalizeEpoch(ONE);
 
-    assertThat(database.getBlindedExecutionPayloadEnvelope(blockAndState.getRoot())).isEmpty();
+    assertThat(database.getBlindedExecutionPayloadEnvelope(emptyPayloadBlockRoot)).isEmpty();
+    // The block itself is retained, as are the envelopes of payloads the chain built on
+    assertThat(database.getSignedBlock(emptyPayloadBlockRoot)).isPresent();
+    gloasChainBuilder
+        .streamBlocksAndStates(1, epoch1Slot.longValue())
+        .filter(blockAndState -> !blockAndState.getSlot().equals(emptyPayloadSlot))
+        .forEach(
+            blockAndState ->
+                assertThat(database.getBlindedExecutionPayloadEnvelope(blockAndState.getRoot()))
+                    .describedAs("Envelope for slot %s", blockAndState.getSlot())
+                    .isPresent());
+  }
+
+  @TestTemplate
+  public void
+      shouldDeleteBlindedExecutionPayloadEnvelopeOfPreviouslyFinalizedBlockWhenItsChildIsFinalized(
+          final DatabaseContext context) throws IOException {
+    setupWithSpec(TestSpecFactory.createMinimalGloas(), BLSKeyGenerator.generateKeyPairs(8));
+    createStorageSystem(
+        context, StateStorageMode.PRUNE, StoreConfig.builder().blockCacheSize(1).build(), false);
+    // Use the storage system's own chain builder, whose keys match the mock-start validators
+    final ChainBuilder gloasChainBuilder = storageSystem.chainBuilder();
+    recentChainData.initializeFromGenesis(gloasChainBuilder.generateGenesis().getState(), ZERO);
+    final ChainUpdater chainUpdater = storageSystem.chainUpdater();
+
+    // The block finalized first is at the start of epoch 1 and its child builds on its EMPTY
+    // variant
+    final UInt64 epoch1Slot = spec.computeStartSlotAtEpoch(ONE);
+    final UInt64 epoch2Slot = spec.computeStartSlotAtEpoch(UInt64.valueOf(2));
+    advanceGloasChain(chainUpdater, ONE, epoch2Slot, epoch1Slot.increment());
+    final Bytes32 firstFinalizedBlockRoot = gloasChainBuilder.getBlockAtSlot(epoch1Slot).getRoot();
+
+    // The finalized block has no finalized child yet, so its payload status is not resolved
+    chainUpdater.finalizeEpoch(ONE);
+    assertThat(database.getBlindedExecutionPayloadEnvelope(firstFinalizedBlockRoot)).isPresent();
+
+    // Finalizing its child resolves it, with the block already in the finalized database
+    chainUpdater.finalizeEpoch(UInt64.valueOf(2));
+    assertThat(database.getBlindedExecutionPayloadEnvelope(firstFinalizedBlockRoot)).isEmpty();
+    assertThat(database.getSignedBlock(firstFinalizedBlockRoot)).isPresent();
+    assertThat(
+            database.getBlindedExecutionPayloadEnvelope(
+                gloasChainBuilder.getBlockAtSlot(epoch1Slot.increment()).getRoot()))
+        .isPresent();
+  }
+
+  /**
+   * Imports one block and its execution payload envelope per transaction up to {@code toSlot}. The
+   * block at {@code slotBuildingOnEmptyParent} builds on the EMPTY variant of its parent.
+   */
+  private void advanceGloasChain(
+      final ChainUpdater chainUpdater,
+      final UInt64 fromSlot,
+      final UInt64 toSlot,
+      final UInt64 slotBuildingOnEmptyParent) {
+    for (UInt64 slot = fromSlot; slot.isLessThanOrEqualTo(toSlot); slot = slot.increment()) {
+      if (slot.equals(slotBuildingOnEmptyParent)) {
+        chainUpdater.advanceChain(
+            slot, storageSystem.chainBuilder().createBlockOptionsBuildingOnEmptyParent(slot));
+      } else {
+        chainUpdater.advanceChain(slot);
+      }
+    }
   }
 
   @TestTemplate

@@ -226,6 +226,20 @@ class ForkChoiceUtilTest {
   }
 
   @Test
+  void getAncestorNodes_shouldReturnEmptyWhenCountIsZero() {
+    chainBuilder.generateBlocksUpToSlot(5);
+
+    final NavigableMap<UInt64, ForkChoiceNode> nodesBySlot =
+        forkChoiceUtil.getAncestorNodes(
+            forkChoiceStrategy,
+            ForkChoiceNode.createBase(chainBuilder.getChainHead().orElseThrow().getRoot()),
+            UInt64.ZERO,
+            UInt64.ZERO);
+
+    assertThat(nodesBySlot).isEmpty();
+  }
+
+  @Test
   void getAncestorNodes_shouldReturnEmptyWhenStartNodeIsUnknown() {
     chainBuilder.generateBlocksUpToSlot(5);
 

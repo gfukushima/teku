@@ -115,7 +115,36 @@ public class StoreTransactionGloasTest extends AbstractStoreTest {
     final ChainBuilder gloasChainBuilder = ChainBuilder.create(spec, keys);
     final SignedBlockAndState genesis = gloasChainBuilder.generateGenesis();
     final Checkpoint genesisCheckpoint = gloasChainBuilder.getCurrentCheckpointForEpoch(0);
-    final UpdatableStore store = createStore(genesis, genesisCheckpoint);
+
+    final UpdatableStore store =
+        StoreBuilder.create()
+            .asyncRunner(SyncAsyncRunner.SYNC_RUNNER)
+            .metricsSystem(new StubMetricsSystem())
+            .specProvider(spec)
+            .blockProvider(roots -> SafeFuture.completedFuture(Collections.emptyMap()))
+            .earliestBlobSidecarSlotProvider(EarliestBlobSidecarSlotProvider.NOOP)
+            .stateProvider(StateAndBlockSummaryProvider.NOOP)
+            .anchor(Optional.empty())
+            .genesisTime(genesis.getState().getGenesisTime())
+            .time(genesis.getState().getGenesisTime())
+            .latestFinalized(AnchorPoint.create(spec, genesisCheckpoint, genesis))
+            .justifiedCheckpoint(genesisCheckpoint)
+            .bestJustifiedCheckpoint(genesisCheckpoint)
+            .blockInformation(
+                Map.of(
+                    genesis.getRoot(),
+                    new StoredBlockMetadata(
+                        genesis.getSlot(),
+                        genesis.getRoot(),
+                        genesis.getParentRoot(),
+                        genesis.getStateRoot(),
+                        genesis.getExecutionBlockNumber(),
+                        genesis.getExecutionBlockHash(),
+                        Optional.of(spec.calculateBlockCheckpoints(genesis.getState())))))
+            .storeConfig(StoreConfig.createDefault())
+            .votes(Collections.emptyMap())
+            .latestCanonicalBlockRoot(Optional.empty())
+            .build();
 
     // Generate blocks spanning 2 epochs so we can finalize epoch 1
     final UInt64 epoch2Slot = spec.computeStartSlotAtEpoch(UInt64.valueOf(2));
@@ -160,91 +189,6 @@ public class StoreTransactionGloasTest extends AbstractStoreTest {
                         "Envelope for finalized block at slot %s should be present",
                         blockAndState.getSlot())
                     .containsKey(blockAndState.getRoot()));
-  }
-
-  @Test
-  public void commit_shouldReportFinalizedBlocksWhosePayloadTheFinalizedChainDidNotBuildOn() {
-    final List<BLSKeyPair> keys = BLSKeyGenerator.generateKeyPairs(16);
-    final ChainBuilder gloasChainBuilder = ChainBuilder.create(spec, keys);
-    final SignedBlockAndState genesis = gloasChainBuilder.generateGenesis();
-    final Checkpoint genesisCheckpoint = gloasChainBuilder.getCurrentCheckpointForEpoch(0);
-    final UpdatableStore store = createStore(genesis, genesisCheckpoint);
-
-    // Generate blocks spanning 2 epochs so we can finalize epoch 1. The block at slot 4 builds on
-    // the EMPTY variant of the block at slot 3, so the payload of slot 3 is not part of the chain
-    // even though its envelope is available.
-    final UInt64 epoch2Slot = spec.computeStartSlotAtEpoch(UInt64.valueOf(2));
-    final UInt64 emptyPayloadSlot = UInt64.valueOf(3);
-    for (UInt64 slot = UInt64.ONE; slot.isLessThanOrEqualTo(epoch2Slot); slot = slot.increment()) {
-      if (slot.equals(emptyPayloadSlot.increment())) {
-        gloasChainBuilder.generateBlockAtSlot(
-            slot, gloasChainBuilder.createBlockOptionsBuildingOnEmptyParent(slot));
-      } else {
-        gloasChainBuilder.generateBlockAtSlot(slot);
-      }
-    }
-
-    final StorageUpdateChannel channel = mock(StorageUpdateChannel.class);
-    when(channel.onStorageUpdate(any())).thenReturn(SafeFuture.completedFuture(UpdateResult.EMPTY));
-
-    final UpdatableStore.StoreTransaction tx = store.startTransaction(channel);
-    gloasChainBuilder
-        .streamBlocksAndStates(1, gloasChainBuilder.getLatestSlot().longValue())
-        .forEach(
-            blockAndState -> {
-              tx.putBlockAndState(
-                  blockAndState, spec.calculateBlockCheckpoints(blockAndState.getState()));
-              gloasChainBuilder
-                  .getExecutionPayloadAtSlot(blockAndState.getSlot())
-                  .ifPresent(payload -> tx.putExecutionPayload(payload, false));
-            });
-    final Checkpoint finalizedCheckpoint =
-        gloasChainBuilder.getCurrentCheckpointForEpoch(UInt64.valueOf(1));
-    tx.setFinalizedCheckpoint(finalizedCheckpoint, false);
-
-    assertThat(tx.commit()).isCompleted();
-    final ArgumentCaptor<StorageUpdate> captor = ArgumentCaptor.forClass(StorageUpdate.class);
-    verify(channel).onStorageUpdate(captor.capture());
-    final StorageUpdate storageUpdate = captor.getValue();
-
-    final Bytes32 emptyPayloadBlockRoot =
-        gloasChainBuilder.getBlockAtSlot(emptyPayloadSlot).getRoot();
-    assertThat(storageUpdate.getOrphanedExecutionPayloadRoots())
-        .containsExactly(emptyPayloadBlockRoot);
-    // The envelope is still part of the update: the database drops it from the orphaned roots
-    assertThat(storageUpdate.getBlindedExecutionPayloads()).containsKey(emptyPayloadBlockRoot);
-  }
-
-  private UpdatableStore createStore(
-      final SignedBlockAndState genesis, final Checkpoint genesisCheckpoint) {
-    return StoreBuilder.create()
-        .asyncRunner(SyncAsyncRunner.SYNC_RUNNER)
-        .metricsSystem(new StubMetricsSystem())
-        .specProvider(spec)
-        .blockProvider(roots -> SafeFuture.completedFuture(Collections.emptyMap()))
-        .earliestBlobSidecarSlotProvider(EarliestBlobSidecarSlotProvider.NOOP)
-        .stateProvider(StateAndBlockSummaryProvider.NOOP)
-        .anchor(Optional.empty())
-        .genesisTime(genesis.getState().getGenesisTime())
-        .time(genesis.getState().getGenesisTime())
-        .latestFinalized(AnchorPoint.create(spec, genesisCheckpoint, genesis))
-        .justifiedCheckpoint(genesisCheckpoint)
-        .bestJustifiedCheckpoint(genesisCheckpoint)
-        .blockInformation(
-            Map.of(
-                genesis.getRoot(),
-                new StoredBlockMetadata(
-                    genesis.getSlot(),
-                    genesis.getRoot(),
-                    genesis.getParentRoot(),
-                    genesis.getStateRoot(),
-                    genesis.getExecutionBlockNumber(),
-                    genesis.getExecutionBlockHash(),
-                    Optional.of(spec.calculateBlockCheckpoints(genesis.getState())))))
-        .storeConfig(StoreConfig.createDefault())
-        .votes(Collections.emptyMap())
-        .latestCanonicalBlockRoot(Optional.empty())
-        .build();
   }
 
   @Test
