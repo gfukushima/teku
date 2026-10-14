@@ -852,6 +852,69 @@ public class DatabaseTest {
         .isPresent();
   }
 
+  @TestTemplate
+  public void shouldDeleteBlindedExecutionPayloadEnvelopeOfParentOnlyPresentInFinalizedStorage(
+      final DatabaseContext context) throws IOException {
+    setupWithSpec(TestSpecFactory.createMinimalGloas(), BLSKeyGenerator.generateKeyPairs(8));
+    // Prune mode finalizes exactly the supplied roots, so the parent block is not part of the
+    // second update
+    initialize(context, StateStorageMode.PRUNE);
+    // The block at slot 1 is finalized together with its envelope, without ever being a hot block,
+    // so it can only be read from finalized storage
+    final SignedBlockAndState parent = chainBuilder.generateNextBlock();
+    final SignedBlindedExecutionPayloadEnvelope parentEnvelope =
+        getSignedBlindedExecutionPayloadEnvelope(parent);
+    database.update(
+        storageUpdateWithBlindedExecutionPayloads(
+            Optional.of(
+                FinalizedChainData.builder()
+                    .latestFinalized(AnchorPoint.fromInitialBlockAndState(spec, parent))
+                    .build()),
+            Map.of(parent.getRoot(), parentEnvelope)));
+    assertThat(database.getHotBlock(parent.getRoot())).isEmpty();
+    assertThat(database.getBlindedExecutionPayloadEnvelope(parent.getRoot()))
+        .contains(parentEnvelope);
+
+    // The block at slot 2 builds on the EMPTY variant of its parent and is finalized next
+    final SignedBlockAndState child =
+        chainBuilder.generateBlockAtSlot(
+            2, chainBuilder.createBlockOptionsBuildingOnEmptyParent(UInt64.valueOf(2)));
+    database.update(
+        storageUpdateWithBlindedExecutionPayloads(
+            Optional.of(
+                FinalizedChainData.builder()
+                    .latestFinalized(AnchorPoint.fromInitialBlockAndState(spec, child))
+                    .build()),
+            Map.of()));
+
+    assertThat(database.getBlindedExecutionPayloadEnvelope(parent.getRoot())).isEmpty();
+    assertThat(database.getSignedBlock(parent.getRoot())).contains(parent.getBlock());
+  }
+
+  private StorageUpdate storageUpdateWithBlindedExecutionPayloads(
+      final Optional<FinalizedChainData> finalizedChainData,
+      final Map<Bytes32, SignedBlindedExecutionPayloadEnvelope> blindedExecutionPayloads) {
+    return new StorageUpdate(
+        Optional.empty(),
+        finalizedChainData,
+        Optional.empty(),
+        Optional.empty(),
+        Map.of(),
+        Map.of(),
+        blindedExecutionPayloads,
+        Map.of(),
+        Optional.empty(),
+        Map.of(),
+        Map.of(),
+        false,
+        Optional.empty(),
+        Optional.empty(),
+        Optional.empty(),
+        true,
+        false,
+        true);
+  }
+
   /**
    * Imports one block and its execution payload envelope per transaction up to {@code toSlot}. The
    * block at {@code slotBuildingOnEmptyParent} builds on the EMPTY variant of its parent.

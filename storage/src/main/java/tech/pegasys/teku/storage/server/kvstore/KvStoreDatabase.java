@@ -1959,8 +1959,10 @@ public class KvStoreDatabase implements Database {
                 root,
                 __ ->
                     Optional.ofNullable(finalizedBlocks.get(root))
-                        .or(() -> getHotBlock(root))
-                        .or(() -> getFinalizedBlock(root)));
+                        .or(() -> dao.getHotBlock(root))
+                        // Not getFinalizedBlock(root), which reads the hot column: the parent of
+                        // the oldest finalized child is only in finalized storage
+                        .or(() -> dao.getFinalizedBlock(root)));
     final Set<Bytes32> orphanedExecutionPayloadRoots = new HashSet<>();
     finalizedChildToParentMap.forEach(
         (childRoot, parentRoot) ->
