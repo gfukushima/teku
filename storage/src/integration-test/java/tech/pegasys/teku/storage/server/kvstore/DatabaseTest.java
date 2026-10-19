@@ -785,11 +785,26 @@ public class DatabaseTest {
   @TestTemplate
   public void shouldDeleteBlindedExecutionPayloadEnvelopeOfFinalizedBlockWhosePayloadWasNotBuiltOn(
       final DatabaseContext context) throws IOException {
+    assertBlindedExecutionPayloadEnvelopeOfFinalizedBlockWhosePayloadWasNotBuiltOnIsDeleted(
+        context, StateStorageMode.PRUNE);
+  }
+
+  @TestTemplate
+  public void
+      shouldDeleteBlindedExecutionPayloadEnvelopeOfFinalizedBlockWhosePayloadWasNotBuiltOnInArchiveMode(
+          final DatabaseContext context) throws IOException {
+    assertBlindedExecutionPayloadEnvelopeOfFinalizedBlockWhosePayloadWasNotBuiltOnIsDeleted(
+        context, StateStorageMode.ARCHIVE);
+  }
+
+  private void
+      assertBlindedExecutionPayloadEnvelopeOfFinalizedBlockWhosePayloadWasNotBuiltOnIsDeleted(
+          final DatabaseContext context, final StateStorageMode storageMode) throws IOException {
     setupWithSpec(TestSpecFactory.createMinimalGloas(), BLSKeyGenerator.generateKeyPairs(8));
     // A block cache of a single block makes finalized block bodies come from the database, as on a
     // live network where finalization lags block import by far more than the cache size
     createStorageSystem(
-        context, StateStorageMode.PRUNE, StoreConfig.builder().blockCacheSize(1).build(), false);
+        context, storageMode, StoreConfig.builder().blockCacheSize(1).build(), false);
     // Use the storage system's own chain builder, whose keys match the mock-start validators
     final ChainBuilder gloasChainBuilder = storageSystem.chainBuilder();
     recentChainData.initializeFromGenesis(gloasChainBuilder.generateGenesis().getState(), ZERO);

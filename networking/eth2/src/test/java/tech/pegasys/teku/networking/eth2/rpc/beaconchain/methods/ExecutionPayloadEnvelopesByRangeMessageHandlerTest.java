@@ -380,6 +380,29 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandlerTest {
   }
 
   @Test
+  public void onIncomingMessage_shouldNotServeHeadEnvelopeWhenHeadPayloadStatusIsEmpty() {
+    final List<SignedExecutionPayloadEnvelope> allEnvelopes = buildChain(5);
+    // Fork choice selected the EMPTY variant of the head even though its payload is available
+    final UInt64 headSlot = UInt64.valueOf(5);
+    stubHeadChainNodes(slot -> slot.equals(headSlot) ? PAYLOAD_STATUS_EMPTY : PAYLOAD_STATUS_FULL);
+
+    final ExecutionPayloadEnvelopesByRangeRequestMessage message =
+        new ExecutionPayloadEnvelopesByRangeRequestMessage(UInt64.ONE, UInt64.valueOf(5));
+    handler.onIncomingMessage(PROTOCOL_ID, peer, message, callback);
+
+    verify(callback, times(4)).respond(any());
+    for (final SignedExecutionPayloadEnvelope envelope : allEnvelopes) {
+      if (envelope.getSlot().equals(headSlot)) {
+        verify(callback, never()).respond(envelope);
+      } else {
+        verify(callback).respond(envelope);
+      }
+    }
+    verify(callback).completeSuccessfully();
+    verify(peer).adjustExecutionPayloadEnvelopesRequest(any(), eq(4L));
+  }
+
+  @Test
   public void onIncomingMessage_shouldNotServeHeadEnvelopeWhenHeadPayloadStatusIsPending() {
     final List<SignedExecutionPayloadEnvelope> allEnvelopes = buildChain(5);
     // The head payload has been received but fork choice has not selected the FULL variant

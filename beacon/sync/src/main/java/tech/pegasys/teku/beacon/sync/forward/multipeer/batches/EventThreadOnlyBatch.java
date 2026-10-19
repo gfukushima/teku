@@ -84,6 +84,12 @@ public class EventThreadOnlyBatch implements Batch {
   }
 
   @Override
+  public void dropExecutionPayload(final Bytes32 blockRoot) {
+    eventThread.checkOnEventThread();
+    delegate.dropExecutionPayload(blockRoot);
+  }
+
+  @Override
   public Optional<SyncSource> getSource() {
     eventThread.checkOnEventThread();
     return delegate.getSource();

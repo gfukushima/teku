@@ -1599,7 +1599,10 @@ public class KvStoreDatabase implements Database {
                   update.getDeletedHotBlocks().keySet().stream()
                       .filter(root -> !update.getFinalizedChildToParentMap().containsKey(root)),
                   findOrphanedExecutionPayloadRoots(
-                      update.getFinalizedChildToParentMap(), update.getFinalizedBlocks())
+                      update.getFinalizedCheckpoint(),
+                      update.getFinalizedChildToParentMap(),
+                      update.getFinalizedBlocks(),
+                      update.getDeletedHotBlocks())
                       .stream())
               .collect(Collectors.toSet());
       updateBlindedExecutionPayloads(
@@ -1947,11 +1950,27 @@ public class KvStoreDatabase implements Database {
    * Block bodies are read from the database, as the store's block cache does not hold blocks that
    * are finalized long after import. The newly finalized block has no finalized child yet, so it is
    * resolved by the finalization that finalizes its child, when it is the parent already in the
-   * finalized database.
+   * finalized database. The pair of the previously finalized block and its own parent is part of
+   * every finalization update, so it is re-evaluated each time, which is harmless.
+   *
+   * @param deletedHotBlocks the slots of the hot blocks pruned by this update, used to skip
+   *     pre-Gloas parents without reading them
    */
-  private Set<Bytes32> findOrphanedExecutionPayloadRoots(
+  @VisibleForTesting
+  Set<Bytes32> findOrphanedExecutionPayloadRoots(
+      final Optional<Checkpoint> finalizedCheckpoint,
       final Map<Bytes32, Bytes32> finalizedChildToParentMap,
-      final Map<Bytes32, SignedBeaconBlock> finalizedBlocks) {
+      final Map<Bytes32, SignedBeaconBlock> finalizedBlocks,
+      final Map<Bytes32, UInt64> deletedHotBlocks) {
+    // Nothing finalized before the Gloas fork can have an envelope. This matters on networks
+    // where Gloas is scheduled but not yet active, where reading the finalized blocks on every
+    // finalization would be wasted work.
+    if (finalizedCheckpoint
+        .map(checkpoint -> checkpoint.getEpochStartSlot(spec))
+        .filter(spec::isExecutionPayloadEnvelopeAvailableAtSlot)
+        .isEmpty()) {
+      return Set.of();
+    }
     final Map<Bytes32, Optional<SignedBeaconBlock>> blocksByRoot = new HashMap<>();
     final Function<Bytes32, Optional<SignedBeaconBlock>> getBlock =
         root ->
@@ -1960,21 +1979,30 @@ public class KvStoreDatabase implements Database {
                 __ ->
                     Optional.ofNullable(finalizedBlocks.get(root))
                         .or(() -> dao.getHotBlock(root))
-                        // Not getFinalizedBlock(root), which reads the hot column: the parent of
-                        // the oldest finalized child is only in finalized storage
+                        // The parent of the oldest finalized child is only in finalized storage.
+                        // This is the dao's finalized lookup, not the getFinalizedBlock(root)
+                        // helper of this class, which reads the hot column.
                         .or(() -> dao.getFinalizedBlock(root)));
     final Set<Bytes32> orphanedExecutionPayloadRoots = new HashSet<>();
     finalizedChildToParentMap.forEach(
-        (childRoot, parentRoot) ->
-            getBlock
-                .apply(parentRoot)
-                .filter(parent -> spec.isExecutionPayloadEnvelopeAvailableAtSlot(parent.getSlot()))
-                .ifPresent(
-                    parent ->
-                        getBlock
-                            .apply(childRoot)
-                            .filter(child -> !isParentBlockFull(parent, child))
-                            .ifPresent(__ -> orphanedExecutionPayloadRoots.add(parentRoot))));
+        (childRoot, parentRoot) -> {
+          // Finalized parents are pruned hot blocks, so their slot is usually known without
+          // reading the block, which skips pre-Gloas parents at the fork boundary cheaply
+          final UInt64 knownParentSlot = deletedHotBlocks.get(parentRoot);
+          if (knownParentSlot != null
+              && !spec.isExecutionPayloadEnvelopeAvailableAtSlot(knownParentSlot)) {
+            return;
+          }
+          getBlock
+              .apply(parentRoot)
+              .filter(parent -> spec.isExecutionPayloadEnvelopeAvailableAtSlot(parent.getSlot()))
+              .ifPresent(
+                  parent ->
+                      getBlock
+                          .apply(childRoot)
+                          .filter(child -> !isParentBlockFull(parent, child))
+                          .ifPresent(__ -> orphanedExecutionPayloadRoots.add(parentRoot)));
+        });
     return orphanedExecutionPayloadRoots;
   }
 

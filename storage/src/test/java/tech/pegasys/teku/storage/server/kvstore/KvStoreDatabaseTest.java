@@ -18,6 +18,8 @@ import static org.assertj.core.api.Assertions.tuple;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.util.ArrayList;
@@ -25,6 +27,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.NavigableSet;
 import java.util.Optional;
+import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
@@ -37,6 +40,7 @@ import tech.pegasys.teku.infrastructure.unsigned.UInt64;
 import tech.pegasys.teku.spec.Spec;
 import tech.pegasys.teku.spec.TestSpecFactory;
 import tech.pegasys.teku.spec.datastructures.lightclient.LightClientUpdate;
+import tech.pegasys.teku.spec.datastructures.state.Checkpoint;
 import tech.pegasys.teku.spec.datastructures.util.DataColumnSlotAndIdentifier;
 import tech.pegasys.teku.spec.util.DataStructureUtil;
 import tech.pegasys.teku.storage.server.Database;
@@ -64,6 +68,72 @@ class KvStoreDatabaseTest {
 
   // Stands in for the persisted LAST_SLOT_DATA_COLUMN_PRUNED variable.
   private Optional<UInt64> prunedWatermark = Optional.empty();
+
+  // Orphaned execution payload detection runs on every finalization once Gloas is in the fork
+  // schedule. Before the fork, and for pre-Gloas parents at the fork boundary, no block body may
+  // be read from the database: nothing can have an execution payload envelope.
+
+  private final UInt64 gloasForkEpoch = UInt64.valueOf(1000);
+  private final Spec gloasScheduledSpec =
+      TestSpecFactory.createMinimalWithGloasForkEpoch(gloasForkEpoch);
+  private final DataStructureUtil gloasDataStructureUtil =
+      new DataStructureUtil(gloasScheduledSpec);
+  private final KvStoreCombinedDao gloasDao = mock(KvStoreCombinedDao.class);
+  private final KvStoreDatabase gloasDatabase =
+      new KvStoreDatabase(gloasDao, StateStorageMode.PRUNE, false, gloasScheduledSpec);
+
+  @Test
+  void findOrphanedExecutionPayloadRoots_shouldNotReadBlocksWhenFinalizedEpochIsBeforeGloas() {
+    final Bytes32 childRoot = gloasDataStructureUtil.randomBytes32();
+    final Bytes32 parentRoot = gloasDataStructureUtil.randomBytes32();
+
+    final Set<Bytes32> orphanedRoots =
+        gloasDatabase.findOrphanedExecutionPayloadRoots(
+            Optional.of(new Checkpoint(gloasForkEpoch.minus(1), childRoot)),
+            Map.of(childRoot, parentRoot),
+            Map.of(),
+            Map.of());
+
+    assertThat(orphanedRoots).isEmpty();
+    verify(gloasDao, never()).getHotBlock(any());
+    verify(gloasDao, never()).getFinalizedBlock(any());
+  }
+
+  @Test
+  void findOrphanedExecutionPayloadRoots_shouldNotReadPreGloasParentsAtForkBoundary() {
+    final Bytes32 childRoot = gloasDataStructureUtil.randomBytes32();
+    final Bytes32 parentRoot = gloasDataStructureUtil.randomBytes32();
+    final UInt64 preGloasSlot = gloasScheduledSpec.computeStartSlotAtEpoch(gloasForkEpoch).minus(1);
+
+    final Set<Bytes32> orphanedRoots =
+        gloasDatabase.findOrphanedExecutionPayloadRoots(
+            Optional.of(new Checkpoint(gloasForkEpoch, childRoot)),
+            Map.of(childRoot, parentRoot),
+            Map.of(),
+            // the pruned hot blocks carry the parent slot, so no block has to be read
+            Map.of(parentRoot, preGloasSlot));
+
+    assertThat(orphanedRoots).isEmpty();
+    verify(gloasDao, never()).getHotBlock(any());
+    verify(gloasDao, never()).getFinalizedBlock(any());
+  }
+
+  @Test
+  void findOrphanedExecutionPayloadRoots_shouldReadGloasParents() {
+    final Bytes32 childRoot = gloasDataStructureUtil.randomBytes32();
+    final Bytes32 parentRoot = gloasDataStructureUtil.randomBytes32();
+    final UInt64 gloasSlot = gloasScheduledSpec.computeStartSlotAtEpoch(gloasForkEpoch);
+    when(gloasDao.getHotBlock(any())).thenReturn(Optional.empty());
+    when(gloasDao.getFinalizedBlock(any())).thenReturn(Optional.empty());
+
+    gloasDatabase.findOrphanedExecutionPayloadRoots(
+        Optional.of(new Checkpoint(gloasForkEpoch.plus(1), childRoot)),
+        Map.of(childRoot, parentRoot),
+        Map.of(),
+        Map.of(parentRoot, gloasSlot));
+
+    verify(gloasDao).getHotBlock(parentRoot);
+  }
 
   @Test
   void prunesOldestDistinctSlotsInASingleCommit() {

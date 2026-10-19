@@ -302,7 +302,8 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandler
       if (knownNode != null) {
         if (knownNode.payloadStatus() != PAYLOAD_STATUS_FULL) {
           // The payload is not part of the head chain: the next block built on the EMPTY variant,
-          // or the head is still PENDING. Its envelope must not be served even if we hold it.
+          // or the head itself is EMPTY or PENDING because fork choice has not selected its
+          // payload. Its envelope must not be served even if we hold it.
           return SafeFuture.completedFuture(Optional.empty());
         }
         // Known node whose payload is part of the chain so lookup by root

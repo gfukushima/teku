@@ -516,12 +516,19 @@ public class SyncSourceBatch implements Batch {
     return true;
   }
 
+  @Override
+  public void dropExecutionPayload(final Bytes32 blockRoot) {
+    eventThread.checkOnEventThread();
+    dropExecutionPayload(executionPayloadsByBlockRoot, blockRoot);
+  }
+
   /**
    * Drops the execution payloads of blocks whose next block built on their EMPTY variant. Such
    * payloads are not part of the chain, so importing them would only add fork choice nodes the
    * chain does not build on, and they must not be served to other peers. Peers are expected not to
    * send them, but older peers may still do so, so they are dropped rather than invalidating the
-   * batch. The payload of the last block received can only be resolved by the next block.
+   * batch. The payload of the last block of the batch is resolved by {@link
+   * #dropExecutionPayload(Bytes32)} once the first block of the next batch is known.
    */
   private void dropExecutionPayloadsNotBuiltOn(
       final List<SignedBeaconBlock> newBlocks,
@@ -543,15 +550,21 @@ public class SyncSourceBatch implements Batch {
       final Map<Bytes32, SignedExecutionPayloadEnvelope> executionPayloadsByBlockRoot,
       final SignedBeaconBlock block,
       final SignedBeaconBlock nextBlock) {
-    if (!executionPayloadsByBlockRoot.containsKey(block.getRoot())
-        || isParentBlockFull(block, nextBlock)) {
-      return;
+    if (!isParentBlockFull(block, nextBlock)) {
+      dropExecutionPayload(executionPayloadsByBlockRoot, block.getRoot());
     }
-    LOG.debug(
-        "Dropping execution payload envelope for slot {} and root {} because the next block did not build on it",
-        block.getSlot(),
-        block.getRoot());
-    executionPayloadsByBlockRoot.remove(block.getRoot());
+  }
+
+  private void dropExecutionPayload(
+      final Map<Bytes32, SignedExecutionPayloadEnvelope> executionPayloadsByBlockRoot,
+      final Bytes32 blockRoot) {
+    final SignedExecutionPayloadEnvelope dropped = executionPayloadsByBlockRoot.remove(blockRoot);
+    if (dropped != null) {
+      LOG.debug(
+          "Dropping execution payload envelope for slot {} and root {} because the next block did not build on it",
+          dropped.getSlot(),
+          blockRoot);
+    }
   }
 
   private void logBatchInvalidBecauseOfExecutionPayloadMissing(final SignedBeaconBlock block) {

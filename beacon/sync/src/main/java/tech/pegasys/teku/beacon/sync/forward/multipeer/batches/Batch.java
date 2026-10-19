@@ -42,6 +42,12 @@ public interface Batch {
 
   Map<Bytes32, SignedExecutionPayloadEnvelope> getExecutionPayloadsByBlockRoot();
 
+  /**
+   * Drops the execution payload envelope of the block with the given root, if any, because the
+   * chain did not build on it.
+   */
+  void dropExecutionPayload(Bytes32 blockRoot);
+
   Optional<SyncSource> getSource();
 
   void markComplete();

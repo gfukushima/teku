@@ -344,6 +344,7 @@ public class BatchSync implements Sync {
         firstBatch.markAsInvalid();
         return;
       }
+      dropBoundaryExecutionPayloadNotBuiltOn(firstBatch, secondBatch);
       markBatchesAsFormingChain(
           firstBatch, secondBatch, activeBatches.batchesBetweenExclusive(firstBatch, secondBatch));
       return;
@@ -545,6 +546,23 @@ public class BatchSync implements Sync {
   private Boolean blocksForChain(
       final SignedBeaconBlock lastBlock, final SignedBeaconBlock firstBlock) {
     return lastBlock.getRoot().equals(firstBlock.getParentRoot());
+  }
+
+  /**
+   * A batch cannot tell whether the chain built on the payload of its last block until the first
+   * block of the next batch is known. When that block built on the EMPTY variant, the envelope is
+   * dropped so it is neither imported nor served on to other peers.
+   */
+  private void dropBoundaryExecutionPayloadNotBuiltOn(
+      final Batch firstBatch, final Batch secondBatch) {
+    firstBatch
+        .getLastBlock()
+        .ifPresent(
+            lastBlock ->
+                secondBatch
+                    .getFirstBlock()
+                    .filter(firstBlock -> !isParentBlockFull(lastBlock, firstBlock))
+                    .ifPresent(__ -> firstBatch.dropExecutionPayload(lastBlock.getRoot())));
   }
 
   private boolean isRequiredBoundaryExecutionPayloadMissing(
