@@ -19,10 +19,12 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableSet;
@@ -39,9 +41,11 @@ import tech.pegasys.teku.infrastructure.metrics.StubMetricsSystem;
 import tech.pegasys.teku.infrastructure.unsigned.UInt64;
 import tech.pegasys.teku.spec.Spec;
 import tech.pegasys.teku.spec.TestSpecFactory;
+import tech.pegasys.teku.spec.datastructures.blocks.SignedBlockAndState;
 import tech.pegasys.teku.spec.datastructures.lightclient.LightClientUpdate;
 import tech.pegasys.teku.spec.datastructures.state.Checkpoint;
 import tech.pegasys.teku.spec.datastructures.util.DataColumnSlotAndIdentifier;
+import tech.pegasys.teku.spec.generator.ChainBuilder;
 import tech.pegasys.teku.spec.util.DataStructureUtil;
 import tech.pegasys.teku.storage.server.Database;
 import tech.pegasys.teku.storage.server.StateStorageMode;
@@ -116,6 +120,43 @@ class KvStoreDatabaseTest {
     assertThat(orphanedRoots).isEmpty();
     verify(gloasDao, never()).getHotBlock(any());
     verify(gloasDao, never()).getFinalizedBlock(any());
+  }
+
+  @Test
+  void findOrphanedExecutionPayloadRoots_shouldReadEachFinalizedBlockOnceWalkingTheChain() {
+    // Gloas from genesis: every finalized block may have an envelope
+    final Spec gloasSpec = TestSpecFactory.createMinimalGloas();
+    final ChainBuilder chainBuilder = ChainBuilder.create(gloasSpec);
+    final SignedBlockAndState genesis = chainBuilder.generateGenesis();
+    chainBuilder.generateBlocksUpToSlot(2);
+    // The block at slot 3 builds on the EMPTY variant of the block at slot 2
+    chainBuilder.generateBlockAtSlot(
+        3, chainBuilder.createBlockOptionsBuildingOnEmptyParent(UInt64.valueOf(3)));
+    chainBuilder.generateBlockAtSlot(4);
+    final KvStoreCombinedDao dao = mock(KvStoreCombinedDao.class);
+    when(dao.getHotBlock(any()))
+        .thenAnswer(invocation -> chainBuilder.getBlock(invocation.getArgument(0)));
+    final KvStoreDatabase database =
+        new KvStoreDatabase(dao, StateStorageMode.PRUNE, false, gloasSpec);
+    final Map<Bytes32, Bytes32> finalizedChildToParent = new HashMap<>();
+    chainBuilder
+        .streamBlocksAndStates(1, 4)
+        .forEach(block -> finalizedChildToParent.put(block.getRoot(), block.getParentRoot()));
+
+    final Set<Bytes32> orphanedRoots =
+        database.findOrphanedExecutionPayloadRoots(
+            Optional.of(new Checkpoint(UInt64.ZERO, chainBuilder.getBlockAtSlot(4).getRoot())),
+            finalizedChildToParent,
+            Map.of(),
+            Map.of());
+
+    assertThat(orphanedRoots).containsExactly(chainBuilder.getBlockAtSlot(2).getRoot());
+    // Each block of the chain, down to the parent of the oldest finalized block, is read once
+    chainBuilder
+        .streamBlocksAndStates(1, 4)
+        .forEach(block -> verify(dao, times(1)).getHotBlock(block.getRoot()));
+    verify(dao, times(1)).getHotBlock(genesis.getRoot());
+    verify(dao, never()).getFinalizedBlock(any());
   }
 
   @Test

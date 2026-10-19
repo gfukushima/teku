@@ -344,7 +344,6 @@ public class BatchSync implements Sync {
         firstBatch.markAsInvalid();
         return;
       }
-      dropBoundaryExecutionPayloadNotBuiltOn(firstBatch, secondBatch);
       markBatchesAsFormingChain(
           firstBatch, secondBatch, activeBatches.batchesBetweenExclusive(firstBatch, secondBatch));
       return;
@@ -549,22 +548,15 @@ public class BatchSync implements Sync {
   }
 
   /**
-   * A batch cannot tell whether the chain built on the payload of its last block until the first
-   * block of the next batch is known. When that block built on the EMPTY variant, the envelope is
-   * dropped so it is neither imported nor served on to other peers.
+   * Resolves the execution payload of the last block of {@code firstBatch} against the first block
+   * of {@code secondBatch}, which a batch cannot do on its own. When that block built on the
+   * payload, the envelope is required; it may have been kept aside when an earlier first block of
+   * {@code secondBatch} did not build on it, as happens when the batch is re-downloaded on another
+   * fork, so it is restored rather than reported missing. When that block did not build on the
+   * payload, the envelope is kept aside so it is neither imported nor served on to other peers.
+   *
+   * @return whether a required envelope is missing
    */
-  private void dropBoundaryExecutionPayloadNotBuiltOn(
-      final Batch firstBatch, final Batch secondBatch) {
-    firstBatch
-        .getLastBlock()
-        .ifPresent(
-            lastBlock ->
-                secondBatch
-                    .getFirstBlock()
-                    .filter(firstBlock -> !isParentBlockFull(lastBlock, firstBlock))
-                    .ifPresent(__ -> firstBatch.dropExecutionPayload(lastBlock.getRoot())));
-  }
-
   private boolean isRequiredBoundaryExecutionPayloadMissing(
       final Batch firstBatch, final Batch secondBatch) {
     return firstBatch
@@ -573,13 +565,15 @@ public class BatchSync implements Sync {
             lastBlock ->
                 secondBatch
                     .getFirstBlock()
-                    .filter(
-                        firstBlock ->
-                            isParentBlockFull(lastBlock, firstBlock)
-                                && !firstBatch
-                                    .getExecutionPayloadsByBlockRoot()
-                                    .containsKey(lastBlock.getRoot())))
-        .isPresent();
+                    .map(
+                        firstBlock -> {
+                          if (isParentBlockFull(lastBlock, firstBlock)) {
+                            return !firstBatch.restoreExecutionPayload(lastBlock.getRoot());
+                          }
+                          firstBatch.dropExecutionPayload(lastBlock.getRoot());
+                          return false;
+                        }))
+        .orElse(false);
   }
 
   private void progressSync() {

@@ -75,6 +75,10 @@ public class SyncSourceBatch implements Batch {
   private final Map<Bytes32, List<BlobSidecar>> blobSidecarsByBlockRoot = new HashMap<>();
   private final Map<Bytes32, SignedExecutionPayloadEnvelope> executionPayloadsByBlockRoot =
       new HashMap<>();
+  // Boundary envelopes the next batch did not build on, kept until the batch is reset in case the
+  // next batch is re-downloaded with a first block that does build on them
+  private final Map<Bytes32, SignedExecutionPayloadEnvelope> droppedExecutionPayloadsByBlockRoot =
+      new HashMap<>();
 
   SyncSourceBatch(
       final EventThread eventThread,
@@ -348,6 +352,7 @@ public class SyncSourceBatch implements Batch {
     blocks.clear();
     blobSidecarsByBlockRoot.clear();
     executionPayloadsByBlockRoot.clear();
+    droppedExecutionPayloadsByBlockRoot.clear();
   }
 
   private void onRequestComplete(
@@ -381,11 +386,11 @@ public class SyncSourceBatch implements Batch {
     if (maybeExecutionPayloadRequestHandler.isPresent()) {
       final Map<Bytes32, SignedExecutionPayloadEnvelope> newExecutionPayloadsByBlockRoot =
           maybeExecutionPayloadRequestHandler.get().complete();
-      if (!validateNewExecutionPayloads(newBlocks, newExecutionPayloadsByBlockRoot, lastBlock)) {
+      if (!validateAndPruneNewExecutionPayloads(
+          newBlocks, newExecutionPayloadsByBlockRoot, lastBlock)) {
         markAsInvalid();
         return;
       }
-      dropExecutionPayloadsNotBuiltOn(newBlocks, newExecutionPayloadsByBlockRoot, lastBlock);
       executionPayloadsByBlockRoot.putAll(newExecutionPayloadsByBlockRoot);
     }
 
@@ -488,74 +493,81 @@ public class SyncSourceBatch implements Batch {
     return true;
   }
 
-  private boolean validateNewExecutionPayloads(
+  /**
+   * Checks the execution payload of each block against the block that follows it. When the next
+   * block built on the payload, the envelope must be present or the batch is invalid. Otherwise the
+   * envelope, if any, is dropped: such a payload is not part of the chain, importing it would only
+   * add fork choice nodes the chain does not build on, and it must not be served to other peers.
+   * Peers are expected not to send them, but older peers may still do so, so they are dropped
+   * rather than invalidating the batch. The last block of the batch is resolved by {@link
+   * #dropExecutionPayload(Bytes32)} and {@link #restoreExecutionPayload(Bytes32)} once the first
+   * block of the next batch is known.
+   */
+  private boolean validateAndPruneNewExecutionPayloads(
       final List<SignedBeaconBlock> newBlocks,
       final Map<Bytes32, SignedExecutionPayloadEnvelope> newExecutionPayloadsByBlockRoot,
       final Optional<SignedBeaconBlock> lastBlock) {
     for (int i = 0; i < newBlocks.size(); i++) {
       final SignedBeaconBlock newBlock = newBlocks.get(i);
-      if (i == 0 && lastBlock.isPresent()) {
-        // we want to verify the execution payload is not missing for the last block
-        if (isParentBlockFull(lastBlock.get(), newBlock)
-            && !executionPayloadsByBlockRoot.containsKey(lastBlock.get().getRoot())) {
-          logBatchInvalidBecauseOfExecutionPayloadMissing(lastBlock.get());
-          return false;
-        }
+      if (i == 0
+          && lastBlock.isPresent()
+          && !validateAndPruneExecutionPayload(
+              executionPayloadsByBlockRoot, lastBlock.get(), newBlock)) {
+        return false;
       }
-      // if we don't have an execution payload and is not a last block in the batch, we want to
-      // verify that the block is empty (no execution payload)
-      if (!newExecutionPayloadsByBlockRoot.containsKey(newBlock.getRoot())
-          && i != newBlocks.size() - 1) {
-        final SignedBeaconBlock nextNewBlock = newBlocks.get(i + 1);
-        if (isParentBlockFull(newBlock, nextNewBlock)) {
-          logBatchInvalidBecauseOfExecutionPayloadMissing(newBlock);
-          return false;
-        }
+      if (i != newBlocks.size() - 1
+          && !validateAndPruneExecutionPayload(
+              newExecutionPayloadsByBlockRoot, newBlock, newBlocks.get(i + 1))) {
+        return false;
       }
     }
+    return true;
+  }
+
+  private boolean validateAndPruneExecutionPayload(
+      final Map<Bytes32, SignedExecutionPayloadEnvelope> executionPayloadsByBlockRoot,
+      final SignedBeaconBlock block,
+      final SignedBeaconBlock nextBlock) {
+    if (isParentBlockFull(block, nextBlock)) {
+      if (!executionPayloadsByBlockRoot.containsKey(block.getRoot())) {
+        logBatchInvalidBecauseOfExecutionPayloadMissing(block);
+        return false;
+      }
+      return true;
+    }
+    dropExecutionPayload(executionPayloadsByBlockRoot, block.getRoot());
     return true;
   }
 
   @Override
   public void dropExecutionPayload(final Bytes32 blockRoot) {
     eventThread.checkOnEventThread();
-    dropExecutionPayload(executionPayloadsByBlockRoot, blockRoot);
+    // Kept aside rather than discarded: the next batch may be re-downloaded on another fork whose
+    // first block does build on this payload
+    dropExecutionPayload(executionPayloadsByBlockRoot, blockRoot)
+        .ifPresent(dropped -> droppedExecutionPayloadsByBlockRoot.put(blockRoot, dropped));
   }
 
-  /**
-   * Drops the execution payloads of blocks whose next block built on their EMPTY variant. Such
-   * payloads are not part of the chain, so importing them would only add fork choice nodes the
-   * chain does not build on, and they must not be served to other peers. Peers are expected not to
-   * send them, but older peers may still do so, so they are dropped rather than invalidating the
-   * batch. The payload of the last block of the batch is resolved by {@link
-   * #dropExecutionPayload(Bytes32)} once the first block of the next batch is known.
-   */
-  private void dropExecutionPayloadsNotBuiltOn(
-      final List<SignedBeaconBlock> newBlocks,
-      final Map<Bytes32, SignedExecutionPayloadEnvelope> newExecutionPayloadsByBlockRoot,
-      final Optional<SignedBeaconBlock> lastBlock) {
-    for (int i = 0; i < newBlocks.size(); i++) {
-      final SignedBeaconBlock newBlock = newBlocks.get(i);
-      if (i == 0 && lastBlock.isPresent()) {
-        dropExecutionPayloadIfNotBuiltOn(executionPayloadsByBlockRoot, lastBlock.get(), newBlock);
-      }
-      if (i != newBlocks.size() - 1) {
-        dropExecutionPayloadIfNotBuiltOn(
-            newExecutionPayloadsByBlockRoot, newBlock, newBlocks.get(i + 1));
-      }
+  @Override
+  public boolean restoreExecutionPayload(final Bytes32 blockRoot) {
+    eventThread.checkOnEventThread();
+    if (executionPayloadsByBlockRoot.containsKey(blockRoot)) {
+      return true;
     }
-  }
-
-  private void dropExecutionPayloadIfNotBuiltOn(
-      final Map<Bytes32, SignedExecutionPayloadEnvelope> executionPayloadsByBlockRoot,
-      final SignedBeaconBlock block,
-      final SignedBeaconBlock nextBlock) {
-    if (!isParentBlockFull(block, nextBlock)) {
-      dropExecutionPayload(executionPayloadsByBlockRoot, block.getRoot());
+    final SignedExecutionPayloadEnvelope dropped =
+        droppedExecutionPayloadsByBlockRoot.remove(blockRoot);
+    if (dropped == null) {
+      return false;
     }
+    LOG.debug(
+        "Restoring execution payload envelope for slot {} and root {} because the next block builds on it",
+        dropped.getSlot(),
+        blockRoot);
+    executionPayloadsByBlockRoot.put(blockRoot, dropped);
+    return true;
   }
 
-  private void dropExecutionPayload(
+  private Optional<SignedExecutionPayloadEnvelope> dropExecutionPayload(
       final Map<Bytes32, SignedExecutionPayloadEnvelope> executionPayloadsByBlockRoot,
       final Bytes32 blockRoot) {
     final SignedExecutionPayloadEnvelope dropped = executionPayloadsByBlockRoot.remove(blockRoot);
@@ -565,6 +577,7 @@ public class SyncSourceBatch implements Batch {
           dropped.getSlot(),
           blockRoot);
     }
+    return Optional.ofNullable(dropped);
   }
 
   private void logBatchInvalidBecauseOfExecutionPayloadMissing(final SignedBeaconBlock block) {

@@ -562,6 +562,49 @@ public class SyncSourceBatchTest {
         .hasSize(batchCount - 1);
   }
 
+  @Test
+  void dropExecutionPayload_shouldKeepEnvelopeAsideUntilRestored() {
+    eventThread.markAsOnEventThread();
+    final int batchCount = 3;
+    final Batch batch = createBatch(gloasSlot, batchCount);
+    batch.requestMoreBlocks(() -> {});
+    generateRealisticChain(gloasSlot, batch.getLastSlot().longValue());
+    receiveBlocksFromChainBuilder(batch, gloasSlot, batch.getLastSlot().longValue());
+    receiveExecutionPayloadsFromChainBuilder(
+        batch, gloasSlot, batch.getLastSlot().longValue(), __ -> true);
+    final Bytes32 lastBlockRoot = chainBuilder.getBlockAtSlot(batch.getLastSlot()).getRoot();
+    assertThat(batch.getExecutionPayloadsByBlockRoot()).containsKey(lastBlockRoot);
+
+    // The next batch's first block did not build on the payload
+    batch.dropExecutionPayload(lastBlockRoot);
+    assertThat(batch.getExecutionPayloadsByBlockRoot()).doesNotContainKey(lastBlockRoot);
+
+    // A re-downloaded next batch does build on it
+    assertThat(batch.restoreExecutionPayload(lastBlockRoot)).isTrue();
+    assertThat(batch.getExecutionPayloadsByBlockRoot()).containsKey(lastBlockRoot);
+    // Restoring an available envelope is a no-op, an unknown one cannot be restored
+    assertThat(batch.restoreExecutionPayload(lastBlockRoot)).isTrue();
+    assertThat(batch.restoreExecutionPayload(dataStructureUtil.randomBytes32())).isFalse();
+  }
+
+  @Test
+  void markAsInvalid_shouldDiscardEnvelopesKeptAside() {
+    eventThread.markAsOnEventThread();
+    final Batch batch = createBatch(gloasSlot, 3);
+    batch.requestMoreBlocks(() -> {});
+    generateRealisticChain(gloasSlot, batch.getLastSlot().longValue());
+    receiveBlocksFromChainBuilder(batch, gloasSlot, batch.getLastSlot().longValue());
+    receiveExecutionPayloadsFromChainBuilder(
+        batch, gloasSlot, batch.getLastSlot().longValue(), __ -> true);
+    final Bytes32 lastBlockRoot = chainBuilder.getBlockAtSlot(batch.getLastSlot()).getRoot();
+    batch.dropExecutionPayload(lastBlockRoot);
+
+    batch.markAsInvalid();
+
+    assertThat(batch.restoreExecutionPayload(lastBlockRoot)).isFalse();
+    assertThat(batch.getExecutionPayloadsByBlockRoot()).isEmpty();
+  }
+
   protected void generateRealisticChain(final long fromSlot, final long toSlot) {
     generateRealisticChain(fromSlot, toSlot, Optional.empty());
   }

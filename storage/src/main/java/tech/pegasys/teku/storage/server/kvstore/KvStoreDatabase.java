@@ -21,6 +21,7 @@ import static tech.pegasys.teku.infrastructure.unsigned.UInt64.ONE;
 import static tech.pegasys.teku.spec.logic.versions.gloas.helpers.MiscHelpersGloas.isParentBlockFull;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Suppliers;
 import com.google.errorprone.annotations.MustBeClosed;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -2068,44 +2069,51 @@ public class KvStoreDatabase implements Database {
     // Nothing finalized before the Gloas fork can have an envelope. This matters on networks
     // where Gloas is scheduled but not yet active, where reading the finalized blocks on every
     // finalization would be wasted work.
-    if (finalizedCheckpoint
-        .map(checkpoint -> checkpoint.getEpochStartSlot(spec))
-        .filter(spec::isExecutionPayloadEnvelopeAvailableAtSlot)
-        .isEmpty()) {
+    if (finalizedCheckpoint.isEmpty()
+        || !spec.isExecutionPayloadEnvelopeAvailableAtSlot(
+            finalizedCheckpoint.get().getEpochStartSlot(spec))) {
       return Set.of();
     }
-    final Map<Bytes32, Optional<SignedBeaconBlock>> blocksByRoot = new HashMap<>();
     final Function<Bytes32, Optional<SignedBeaconBlock>> getBlock =
         root ->
-            blocksByRoot.computeIfAbsent(
-                root,
-                __ ->
-                    Optional.ofNullable(finalizedBlocks.get(root))
-                        .or(() -> dao.getHotBlock(root))
-                        // The parent of the oldest finalized child is only in finalized storage.
-                        // This is the dao's finalized lookup, not the getFinalizedBlock(root)
-                        // helper of this class, which reads the hot column.
-                        .or(() -> dao.getFinalizedBlock(root)));
+            Optional.ofNullable(finalizedBlocks.get(root))
+                .or(() -> dao.getHotBlock(root))
+                // The parent of the oldest finalized child is only in finalized storage. This is
+                // the dao's finalized lookup, not the getFinalizedBlock(root) helper of this
+                // class, which reads the hot column.
+                .or(() -> dao.getFinalizedBlock(root));
     final Set<Bytes32> orphanedExecutionPayloadRoots = new HashSet<>();
-    finalizedChildToParentMap.forEach(
-        (childRoot, parentRoot) -> {
-          // Finalized parents are pruned hot blocks, so their slot is usually known without
-          // reading the block, which skips pre-Gloas parents at the fork boundary cheaply
-          final UInt64 knownParentSlot = deletedHotBlocks.get(parentRoot);
-          if (knownParentSlot != null
-              && !spec.isExecutionPayloadEnvelopeAvailableAtSlot(knownParentSlot)) {
-            return;
-          }
-          getBlock
-              .apply(parentRoot)
-              .filter(parent -> spec.isExecutionPayloadEnvelopeAvailableAtSlot(parent.getSlot()))
-              .ifPresent(
-                  parent ->
-                      getBlock
-                          .apply(childRoot)
-                          .filter(child -> !isParentBlockFull(parent, child))
-                          .ifPresent(__ -> orphanedExecutionPayloadRoots.add(parentRoot)));
-        });
+    // Walk the finalized chain from the newly finalized block back to the previously finalized
+    // block one pair at a time, so each block is read once and only two are held at a time
+    // however many blocks a finalization covers
+    final Bytes32 newlyFinalizedRoot = finalizedCheckpoint.get().getRoot();
+    Bytes32 childRoot = newlyFinalizedRoot;
+    // The child is only read once there is a Gloas parent to compare it with
+    Supplier<Optional<SignedBeaconBlock>> child =
+        Suppliers.memoize(() -> getBlock.apply(newlyFinalizedRoot));
+    while (finalizedChildToParentMap.containsKey(childRoot)) {
+      final Bytes32 parentRoot = finalizedChildToParentMap.get(childRoot);
+      // Finalized parents are pruned hot blocks, so their slot is usually known without reading
+      // the block, which stops the walk cheaply at the Gloas fork boundary
+      final UInt64 knownParentSlot = deletedHotBlocks.get(parentRoot);
+      if (knownParentSlot != null
+          && !spec.isExecutionPayloadEnvelopeAvailableAtSlot(knownParentSlot)) {
+        break;
+      }
+      final Optional<SignedBeaconBlock> parent = getBlock.apply(parentRoot);
+      if (parent.isEmpty()
+          || !spec.isExecutionPayloadEnvelopeAvailableAtSlot(parent.get().getSlot())) {
+        break;
+      }
+      if (child
+          .get()
+          .filter(childBlock -> !isParentBlockFull(parent.get(), childBlock))
+          .isPresent()) {
+        orphanedExecutionPayloadRoots.add(parentRoot);
+      }
+      childRoot = parentRoot;
+      child = () -> parent;
+    }
     return orphanedExecutionPayloadRoots;
   }
 
