@@ -22,7 +22,9 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.NavigableMap;
 import java.util.Optional;
+import java.util.TreeMap;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import org.apache.logging.log4j.LogManager;
@@ -597,6 +599,45 @@ public class ForkChoiceStrategy implements BlockMetadataStore, ReadOnlyForkChoic
   @Override
   public Optional<ForkChoiceNode> getAncestorNode(final ForkChoiceNode node, final UInt64 slot) {
     return getAncestorProtoNode(node, slot).map(ProtoNode::getForkChoiceNode);
+  }
+
+  @Override
+  public NavigableMap<UInt64, ForkChoiceNode> getAncestorNodes(
+      final ForkChoiceNode node, final UInt64 startSlot, final UInt64 count) {
+    final NavigableMap<UInt64, ForkChoiceNode> nodes = new TreeMap<>();
+    if (count.isZero()) {
+      return nodes;
+    }
+    // minus(ONE) because the start block is included
+    final UInt64 endSlot = startSlot.plus(count).minusMinZero(1);
+    // The whole walk happens under one read lock so that a concurrent prune cannot remove nodes
+    // part way through and truncate the result
+    protoArrayLock.readLock().lock();
+    try {
+      Optional<ProtoNode> currentNode = protoArray.getNode(node);
+      while (currentNode.isPresent()) {
+        final ProtoNode protoNode = currentNode.get();
+        final UInt64 slot = protoNode.getBlockSlot();
+        if (slot.isLessThan(startSlot)) {
+          break;
+        }
+        if (slot.isLessThanOrEqualTo(endSlot)) {
+          nodes.put(slot, protoNode.getForkChoiceNode());
+        }
+        if (slot.equals(startSlot)) {
+          break;
+        }
+        currentNode =
+            getForkChoiceModelForRoot(protoNode.getBlockRoot())
+                .flatMap(
+                    forkChoiceModel ->
+                        forkChoiceModel.getParentBeaconBlockNode(
+                            protoArray, protoNode.getForkChoiceNode()));
+      }
+    } finally {
+      protoArrayLock.readLock().unlock();
+    }
+    return nodes;
   }
 
   @Override

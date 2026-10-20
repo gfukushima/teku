@@ -17,6 +17,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.tuple;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -36,6 +37,7 @@ import java.util.stream.Stream;
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
 import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
 import org.mockito.invocation.InvocationOnMock;
 import tech.pegasys.teku.infrastructure.metrics.StubMetricsSystem;
 import tech.pegasys.teku.infrastructure.unsigned.UInt64;
@@ -43,16 +45,20 @@ import tech.pegasys.teku.spec.Spec;
 import tech.pegasys.teku.spec.TestSpecFactory;
 import tech.pegasys.teku.spec.datastructures.blocks.SignedBlockAndState;
 import tech.pegasys.teku.spec.datastructures.lightclient.LightClientUpdate;
+import tech.pegasys.teku.spec.datastructures.state.AnchorPoint;
 import tech.pegasys.teku.spec.datastructures.state.Checkpoint;
 import tech.pegasys.teku.spec.datastructures.util.DataColumnSlotAndIdentifier;
 import tech.pegasys.teku.spec.generator.ChainBuilder;
 import tech.pegasys.teku.spec.util.DataStructureUtil;
+import tech.pegasys.teku.storage.api.FinalizedChainData;
+import tech.pegasys.teku.storage.api.StorageUpdate;
 import tech.pegasys.teku.storage.server.Database;
 import tech.pegasys.teku.storage.server.StateStorageMode;
 import tech.pegasys.teku.storage.server.kvstore.KvStoreAccessor.KvStoreTransaction;
 import tech.pegasys.teku.storage.server.kvstore.KvStoreDatabase.DataColumnSidecarType;
 import tech.pegasys.teku.storage.server.kvstore.dataaccess.KvStoreCombinedDao;
 import tech.pegasys.teku.storage.server.kvstore.dataaccess.KvStoreCombinedDao.FinalizedUpdater;
+import tech.pegasys.teku.storage.server.kvstore.dataaccess.KvStoreCombinedDao.HotUpdater;
 import tech.pegasys.teku.storage.server.kvstore.schema.KvStoreColumn;
 import tech.pegasys.teku.storage.server.kvstore.schema.V6SchemaCombinedSnapshot;
 
@@ -157,6 +163,71 @@ class KvStoreDatabaseTest {
         .forEach(block -> verify(dao, times(1)).getHotBlock(block.getRoot()));
     verify(dao, times(1)).getHotBlock(genesis.getRoot());
     verify(dao, never()).getFinalizedBlock(any());
+  }
+
+  @Test
+  void update_shouldDeleteOrphanedEnvelopeInTheSameTransactionAsTheFinalizedBlock() {
+    final Spec gloasSpec = TestSpecFactory.createMinimalGloas();
+    final ChainBuilder chainBuilder = ChainBuilder.create(gloasSpec);
+    chainBuilder.generateGenesis();
+    final SignedBlockAndState parent = chainBuilder.generateBlockAtSlot(1);
+    // The child builds on the EMPTY variant of the parent, so the parent's envelope is orphaned
+    final SignedBlockAndState child =
+        chainBuilder.generateBlockAtSlot(
+            2, chainBuilder.createBlockOptionsBuildingOnEmptyParent(UInt64.valueOf(2)));
+    final KvStoreCombinedDao dao = mock(KvStoreCombinedDao.class);
+    when(dao.getAnchor()).thenReturn(Optional.empty());
+    when(dao.getHotBlock(any())).thenReturn(Optional.empty());
+    when(dao.getFinalizedBlock(any())).thenReturn(Optional.empty());
+    final FinalizedUpdater finalizedUpdater = mock(FinalizedUpdater.class);
+    final HotUpdater hotUpdater = mock(HotUpdater.class);
+    final KvStoreDatabase database =
+        new KvStoreDatabase(dao, StateStorageMode.PRUNE, false, gloasSpec) {
+          @Override
+          protected FinalizedUpdater finalizedUpdater() {
+            return finalizedUpdater;
+          }
+
+          @Override
+          protected HotUpdater hotUpdater() {
+            return hotUpdater;
+          }
+        };
+    final FinalizedChainData finalizedChainData =
+        FinalizedChainData.builder()
+            .latestFinalized(AnchorPoint.fromInitialBlockAndState(gloasSpec, child))
+            .finalizedChildAndParent(parent.getRoot(), parent.getParentRoot())
+            .finalizedBlock(parent.getBlock())
+            .build();
+
+    database.update(
+        new StorageUpdate(
+            Optional.empty(),
+            Optional.of(finalizedChainData),
+            Optional.empty(),
+            Optional.empty(),
+            Map.of(),
+            Map.of(),
+            Map.of(),
+            Map.of(),
+            Optional.empty(),
+            Map.of(),
+            Map.of(),
+            false,
+            Optional.empty(),
+            Optional.empty(),
+            Optional.empty(),
+            false,
+            false,
+            true));
+
+    // The envelope is deleted by the transaction that writes the finalized block, before that
+    // transaction commits, and no separate envelope transaction is needed
+    final InOrder inOrder = inOrder(finalizedUpdater);
+    inOrder.verify(finalizedUpdater).addFinalizedBlock(parent.getBlock());
+    inOrder.verify(finalizedUpdater).deleteBlindedExecutionPayloadEnvelope(parent.getRoot());
+    inOrder.verify(finalizedUpdater).commit();
+    verify(finalizedUpdater, times(1)).commit();
   }
 
   @Test

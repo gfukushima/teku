@@ -904,6 +904,33 @@ public class DatabaseTest {
     assertThat(database.getSignedBlock(parent.getRoot())).contains(parent.getBlock());
   }
 
+  @TestTemplate
+  public void
+      shouldNotStoreBlindedExecutionPayloadEnvelopeArrivingWithTheFinalizationOfItsOrphanedBlock(
+          final DatabaseContext context) throws IOException {
+    setupWithSpec(TestSpecFactory.createMinimalGloas(), BLSKeyGenerator.generateKeyPairs(8));
+    initialize(context, StateStorageMode.PRUNE);
+    final SignedBlockAndState parent = chainBuilder.generateNextBlock();
+    final SignedBlockAndState child =
+        chainBuilder.generateBlockAtSlot(
+            2, chainBuilder.createBlockOptionsBuildingOnEmptyParent(UInt64.valueOf(2)));
+
+    // The parent's envelope and the finalization of both blocks arrive in the same update; the
+    // child built on the EMPTY variant of the parent, so the envelope must not survive
+    database.update(
+        storageUpdateWithBlindedExecutionPayloads(
+            Optional.of(
+                FinalizedChainData.builder()
+                    .latestFinalized(AnchorPoint.fromInitialBlockAndState(spec, child))
+                    .finalizedChildAndParent(parent.getRoot(), parent.getParentRoot())
+                    .finalizedBlock(parent.getBlock())
+                    .build()),
+            Map.of(parent.getRoot(), getSignedBlindedExecutionPayloadEnvelope(parent))));
+
+    assertThat(database.getBlindedExecutionPayloadEnvelope(parent.getRoot())).isEmpty();
+    assertThat(database.getSignedBlock(parent.getRoot())).contains(parent.getBlock());
+  }
+
   private StorageUpdate storageUpdateWithBlindedExecutionPayloads(
       final Optional<FinalizedChainData> finalizedChainData,
       final Map<Bytes32, SignedBlindedExecutionPayloadEnvelope> blindedExecutionPayloads) {
