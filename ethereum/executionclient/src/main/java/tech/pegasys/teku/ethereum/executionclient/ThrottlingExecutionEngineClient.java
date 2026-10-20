@@ -51,10 +51,21 @@ import tech.pegasys.teku.spec.logic.versions.deneb.types.VersionedHash;
 public class ThrottlingExecutionEngineClient implements ExecutionEngineClient {
   private final ExecutionEngineClient delegate;
   private final ThrottlingTaskQueue taskQueue;
+  private final ThrottlingTaskQueue payloadBodiesTaskQueue;
 
+  /**
+   * @param maximumConcurrentRequests concurrency limit of the queue serving the engine calls that
+   *     block import, fork choice and block production wait on
+   * @param maximumConcurrentPayloadBodiesRequests concurrency limit of the separate queue serving
+   *     {@code engine_getPayloadBodiesByHash}
+   * @param maximumQueuedPayloadBodiesRequests how many {@code engine_getPayloadBodiesByHash} calls
+   *     may wait for a slot in that queue before further calls are rejected
+   */
   public ThrottlingExecutionEngineClient(
       final ExecutionEngineClient delegate,
       final int maximumConcurrentRequests,
+      final int maximumConcurrentPayloadBodiesRequests,
+      final int maximumQueuedPayloadBodiesRequests,
       final MetricsSystem metricsSystem) {
     this.delegate = delegate;
     taskQueue =
@@ -65,6 +76,14 @@ public class ThrottlingExecutionEngineClient implements ExecutionEngineClient {
             TekuMetricCategory.BEACON,
             "ee_request_queue_size",
             "ee_request_queue_rejected");
+    payloadBodiesTaskQueue =
+        ThrottlingTaskQueue.create(
+            maximumConcurrentPayloadBodiesRequests,
+            maximumQueuedPayloadBodiesRequests,
+            metricsSystem,
+            TekuMetricCategory.BEACON,
+            "ee_payload_bodies_request_queue_size",
+            "ee_payload_bodies_request_queue_rejected");
   }
 
   @Override
@@ -207,9 +226,16 @@ public class ThrottlingExecutionEngineClient implements ExecutionEngineClient {
     return taskQueue.queueTask(() -> delegate.getBlobsV2(blobVersionedHashes));
   }
 
+  /**
+   * Payload bodies are only looked up to unblind historical execution payload envelopes requested
+   * by peers or REST API clients, so these calls are driven by remote input. They go through a
+   * small queue of their own: a burst of them must never sit in front of the newPayload and
+   * forkchoiceUpdated calls that block import and fork choice wait on, and the bounded backlog
+   * rejects further lookups instead of growing without limit.
+   */
   @Override
   public SafeFuture<Response<List<ExecutionPayloadBodyV2>>> getPayloadBodiesByHashV2(
       final List<Bytes32> blockHashes) {
-    return taskQueue.queueTask(() -> delegate.getPayloadBodiesByHashV2(blockHashes));
+    return payloadBodiesTaskQueue.queueTask(() -> delegate.getPayloadBodiesByHashV2(blockHashes));
   }
 }
