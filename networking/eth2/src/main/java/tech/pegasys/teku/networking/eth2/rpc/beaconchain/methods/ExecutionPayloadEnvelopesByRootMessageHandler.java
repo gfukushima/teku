@@ -17,24 +17,14 @@ import static tech.pegasys.teku.infrastructure.async.SafeFuture.completedFuture;
 
 import com.google.common.annotations.VisibleForTesting;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Optional;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import java.util.function.Function;
 import org.apache.tuweni.bytes.Bytes32;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
-import org.hyperledger.besu.plugin.services.metrics.Counter;
-import org.hyperledger.besu.plugin.services.metrics.LabelledMetric;
 import tech.pegasys.teku.infrastructure.async.SafeFuture;
-import tech.pegasys.teku.infrastructure.metrics.TekuMetricCategory;
 import tech.pegasys.teku.infrastructure.ssz.primitive.SszBytes32;
 import tech.pegasys.teku.infrastructure.unsigned.UInt64;
-import tech.pegasys.teku.networking.eth2.peers.Eth2Peer;
-import tech.pegasys.teku.networking.eth2.peers.RequestKey;
-import tech.pegasys.teku.networking.eth2.rpc.core.PeerRequiredLocalMessageHandler;
 import tech.pegasys.teku.networking.eth2.rpc.core.ResponseCallback;
-import tech.pegasys.teku.networking.eth2.rpc.core.RpcException.ResourceUnavailableException;
 import tech.pegasys.teku.networking.p2p.rpc.StreamClosedException;
 import tech.pegasys.teku.spec.Spec;
 import tech.pegasys.teku.spec.datastructures.epbs.versions.gloas.SignedExecutionPayloadEnvelope;
@@ -49,20 +39,9 @@ import tech.pegasys.teku.storage.client.CombinedChainDataClient;
  * schema limits
  */
 public class ExecutionPayloadEnvelopesByRootMessageHandler
-    extends PeerRequiredLocalMessageHandler<
-        ExecutionPayloadEnvelopesByRootRequestMessage, SignedExecutionPayloadEnvelope> {
-
-  private static final Logger LOG = LogManager.getLogger();
-
-  /** Number of roots whose envelopes are unblinded with a single execution layer round trip. */
-  static final int DEFAULT_UNBLINDING_BATCH_SIZE = 32;
-
-  private final Spec spec;
-  private final CombinedChainDataClient combinedChainDataClient;
-  private final LabelledMetric<Counter> requestCounter;
-  private final Counter totalExecutionPayloadEnvelopesRequestedCounter;
-  private final ExecutionPayloadEnvelopesRequestLimiter requestLimiter;
-  private final int unblindingBatchSize;
+    extends AbstractExecutionPayloadEnvelopesMessageHandler<
+        ExecutionPayloadEnvelopesByRootRequestMessage,
+        ExecutionPayloadEnvelopesByRootMessageHandler.RequestState> {
 
   public ExecutionPayloadEnvelopesByRootMessageHandler(
       final Spec spec,
@@ -84,85 +63,34 @@ public class ExecutionPayloadEnvelopesByRootMessageHandler
       final MetricsSystem metricsSystem,
       final ExecutionPayloadEnvelopesRequestLimiter requestLimiter,
       final int unblindingBatchSize) {
-    this.spec = spec;
-    this.combinedChainDataClient = combinedChainDataClient;
-    this.requestLimiter = requestLimiter;
-    this.unblindingBatchSize = unblindingBatchSize;
-    requestCounter =
-        metricsSystem.createLabelledCounter(
-            TekuMetricCategory.NETWORK,
-            "rpc_execution_payload_envelopes_by_root_requests_total",
-            "Total number of execution payload envelopes by root requests received",
-            "status");
-    totalExecutionPayloadEnvelopesRequestedCounter =
-        metricsSystem.createCounter(
-            TekuMetricCategory.NETWORK,
-            "rpc_execution_payload_envelopes_by_root_requested_envelopes_total",
-            "Total number of execution payload envelopes requested in accepted execution payload envelopes by root requests from peers");
+    super(
+        spec,
+        combinedChainDataClient,
+        metricsSystem,
+        requestLimiter,
+        unblindingBatchSize,
+        "by_root");
   }
 
   @Override
-  public void onIncomingMessage(
-      final String protocolId,
-      final Eth2Peer peer,
+  protected long getRequestedCount(final ExecutionPayloadEnvelopesByRootRequestMessage message) {
+    return message.size();
+  }
+
+  @Override
+  protected RequestState createRequestState(
       final ExecutionPayloadEnvelopesByRootRequestMessage message,
       final ResponseCallback<SignedExecutionPayloadEnvelope> callback) {
-    LOG.trace(
-        "Peer {} requested {} execution payload envelopes with roots: {}",
-        peer.getId(),
-        message.size(),
-        message);
-
-    final Optional<RequestKey> maybeRequestKey =
-        peer.approveExecutionPayloadEnvelopesRequest(callback, message.size());
-
-    if (!peer.approveRequest() || maybeRequestKey.isEmpty()) {
-      requestCounter.labels("rate_limited").inc();
-      return;
-    }
-
-    // Any of the roots may be that of a finalized block, whose envelope is only retained blinded
-    // and must be unblinded through the execution layer, so only a bounded number of requests is
-    // served at a time.
-    if (!requestLimiter.tryAcquire()) {
-      requestCounter.labels("concurrency_limited").inc();
-      callback.completeWithErrorResponse(
-          new ResourceUnavailableException(
-              "Too many execution payload envelope requests are being served"));
-      return;
-    }
-
-    requestCounter.labels("ok").inc();
-    totalExecutionPayloadEnvelopesRequestedCounter.inc(message.size());
-
-    final UInt64 currentEpoch =
-        combinedChainDataClient.getRecentChainData().getCurrentEpoch().orElse(UInt64.ZERO);
-    final UInt64 minServableEpoch =
-        currentEpoch
-            .minusMinZero(spec.getNetworkingConfig().getMinEpochsForBlockRequests())
-            .max(spec.getSpecConfig(currentEpoch).getGloasForkEpoch());
-
     final List<Bytes32> blockRoots = new ArrayList<>();
     for (final SszBytes32 beaconBlockRoot : message) {
       blockRoots.add(beaconBlockRoot.get());
     }
-    final RequestState requestState = new RequestState(callback, blockRoots, minServableEpoch);
+    return new RequestState(callback, blockRoots, getMinServableEpoch());
+  }
 
-    sendNextBatch(requestState)
-        .alwaysRun(requestLimiter::release)
-        .finish(
-            () -> {
-              // The peer is charged for every root whose envelope was retrieved rather than for
-              // the envelopes sent: each retrieval cost a database and, for a finalized block, an
-              // execution layer lookup, whether or not an envelope came out of it. Only roots
-              // dropped before retrieval are refunded.
-              if (requestState.getRetrievedBlockRoots() != message.size()) {
-                peer.adjustExecutionPayloadEnvelopesRequest(
-                    maybeRequestKey.get(), requestState.getRetrievedBlockRoots());
-              }
-              callback.completeSuccessfully();
-            },
-            err -> handleError(err, callback, "execution payload envelopes by root"));
+  @Override
+  protected SafeFuture<Void> serve(final RequestState requestState) {
+    return sendNextBatch(requestState);
   }
 
   /**
@@ -177,13 +105,20 @@ public class ExecutionPayloadEnvelopesByRootMessageHandler
     if (requestState.isStreamClosed()) {
       return SafeFuture.failedFuture(new StreamClosedException());
     }
+    final UInt64 minServableEpoch = requestState.getMinServableEpoch();
     final List<Bytes32> blockRoots = requestState.takeNextBlockRoots(unblindingBatchSize);
-    return selectRetrievableBlockRoots(blockRoots, requestState.getMinServableEpoch())
+    return selectRetrievableBlockRoots(blockRoots, minServableEpoch)
         .thenCompose(
             retrievableBlockRoots -> {
-              requestState.onBlockRootsRetrieved(retrievableBlockRoots.size());
+              // Each retrieval costs a database and, for a finalized block, an execution layer
+              // lookup, whether or not an envelope comes out of it
+              requestState.charge(retrievableBlockRoots.size());
               return loadExecutionPayloadEnvelopes(
-                  retrievableBlockRoots, requestState.getMinServableEpoch());
+                  retrievableBlockRoots,
+                  Function.identity(),
+                  (blockRoot, executionPayload) ->
+                      isWithinServableRange(
+                          executionPayload.getMessage().getSlot(), minServableEpoch));
             })
         .thenCompose(requestState::sendExecutionPayloadEnvelopes)
         .thenCompose(__ -> sendNextBatch(requestState));
@@ -217,50 +152,30 @@ public class ExecutionPayloadEnvelopesByRootMessageHandler
     return retrievableBlockRoots;
   }
 
-  /**
-   * Retrieves the envelopes of all the roots with one lookup and returns them in request order,
-   * leaving out any envelope outside the servable range.
-   */
-  private SafeFuture<List<SignedExecutionPayloadEnvelope>> loadExecutionPayloadEnvelopes(
-      final List<Bytes32> blockRoots, final UInt64 minServableEpoch) {
-    if (blockRoots.isEmpty()) {
-      return completedFuture(List.of());
-    }
-    return combinedChainDataClient
-        .getExecutionPayloadsByBlockRoots(new HashSet<>(blockRoots))
-        .thenApply(
-            executionPayloads ->
-                blockRoots.stream()
-                    .map(
-                        blockRoot ->
-                            Optional.ofNullable(executionPayloads.get(blockRoot))
-                                .filter(
-                                    envelope ->
-                                        isWithinServableRange(
-                                            envelope.getMessage().getSlot(), minServableEpoch)))
-                    .flatMap(Optional::stream)
-                    .toList());
-  }
-
   private boolean isWithinServableRange(final UInt64 slot, final UInt64 minServableEpoch) {
     return spec.computeEpochAtSlot(slot).isGreaterThanOrEqualTo(minServableEpoch);
   }
 
-  private static class RequestState {
+  /** The cursor over the requested roots, in request order. */
+  static class RequestState extends ExecutionPayloadEnvelopesRequestState {
 
-    private final ResponseCallback<SignedExecutionPayloadEnvelope> callback;
     private final List<Bytes32> blockRoots;
     private final UInt64 minServableEpoch;
     private int nextBlockRootIndex = 0;
-    private long retrievedBlockRoots = 0;
 
     RequestState(
         final ResponseCallback<SignedExecutionPayloadEnvelope> callback,
         final List<Bytes32> blockRoots,
         final UInt64 minServableEpoch) {
-      this.callback = callback;
+      super(callback, blockRoots.size());
       this.blockRoots = blockRoots;
       this.minServableEpoch = minServableEpoch;
+    }
+
+    /** Any of the roots may be that of a finalized block, whose envelope must be unblinded. */
+    @Override
+    boolean needsUnblinding() {
+      return true;
     }
 
     UInt64 getMinServableEpoch() {
@@ -271,34 +186,12 @@ public class ExecutionPayloadEnvelopesByRootMessageHandler
       return nextBlockRootIndex < blockRoots.size();
     }
 
-    boolean isStreamClosed() {
-      return callback.isClosed();
-    }
-
-    long getRetrievedBlockRoots() {
-      return retrievedBlockRoots;
-    }
-
     /** Takes up to {@code maxBlockRoots} of the next requested roots, in request order. */
     List<Bytes32> takeNextBlockRoots(final int maxBlockRoots) {
       final int endIndex = Math.min(nextBlockRootIndex + maxBlockRoots, blockRoots.size());
       final List<Bytes32> batch = List.copyOf(blockRoots.subList(nextBlockRootIndex, endIndex));
       nextBlockRootIndex = endIndex;
       return batch;
-    }
-
-    void onBlockRootsRetrieved(final int count) {
-      retrievedBlockRoots += count;
-    }
-
-    SafeFuture<Void> sendExecutionPayloadEnvelopes(
-        final List<SignedExecutionPayloadEnvelope> executionPayloadEnvelopes) {
-      SafeFuture<Void> sent = SafeFuture.COMPLETE;
-      for (final SignedExecutionPayloadEnvelope executionPayloadEnvelope :
-          executionPayloadEnvelopes) {
-        sent = sent.thenCompose(__ -> callback.respond(executionPayloadEnvelope));
-      }
-      return sent;
     }
   }
 }

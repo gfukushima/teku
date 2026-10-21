@@ -23,24 +23,12 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.NavigableMap;
 import java.util.Optional;
-import java.util.Set;
 import java.util.TreeMap;
-import java.util.stream.Collectors;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
-import org.apache.tuweni.bytes.Bytes32;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
-import org.hyperledger.besu.plugin.services.metrics.Counter;
-import org.hyperledger.besu.plugin.services.metrics.LabelledMetric;
 import tech.pegasys.teku.infrastructure.async.SafeFuture;
-import tech.pegasys.teku.infrastructure.metrics.TekuMetricCategory;
 import tech.pegasys.teku.infrastructure.unsigned.UInt64;
-import tech.pegasys.teku.networking.eth2.peers.Eth2Peer;
-import tech.pegasys.teku.networking.eth2.peers.RequestKey;
-import tech.pegasys.teku.networking.eth2.rpc.core.PeerRequiredLocalMessageHandler;
 import tech.pegasys.teku.networking.eth2.rpc.core.ResponseCallback;
 import tech.pegasys.teku.networking.eth2.rpc.core.RpcException;
-import tech.pegasys.teku.networking.eth2.rpc.core.RpcException.ResourceUnavailableException;
 import tech.pegasys.teku.networking.p2p.rpc.StreamClosedException;
 import tech.pegasys.teku.spec.Spec;
 import tech.pegasys.teku.spec.config.SpecConfigGloas;
@@ -56,24 +44,11 @@ import tech.pegasys.teku.storage.client.CombinedChainDataClient;
  * href="https://github.com/ethereum/consensus-specs/blob/master/specs/gloas/p2p-interface.md#executionpayloadenvelopesbyrange-v1">ExecutionPayloadEnvelopesByRange</a>
  */
 public class ExecutionPayloadEnvelopesByRangeMessageHandler
-    extends PeerRequiredLocalMessageHandler<
-        ExecutionPayloadEnvelopesByRangeRequestMessage, SignedExecutionPayloadEnvelope> {
+    extends AbstractExecutionPayloadEnvelopesMessageHandler<
+        ExecutionPayloadEnvelopesByRangeRequestMessage,
+        ExecutionPayloadEnvelopesByRangeMessageHandler.RequestState> {
 
-  private static final Logger LOG = LogManager.getLogger();
-
-  /**
-   * Number of finalized slots whose envelopes are unblinded with a single execution layer round
-   * trip.
-   */
-  static final int DEFAULT_UNBLINDING_BATCH_SIZE = 32;
-
-  private final Spec spec;
   private final SpecConfigGloas config;
-  private final LabelledMetric<Counter> requestCounter;
-  private final CombinedChainDataClient combinedChainDataClient;
-  private final Counter totalExecutionPayloadEnvelopesRequestedCounter;
-  private final ExecutionPayloadEnvelopesRequestLimiter requestLimiter;
-  private final int unblindingBatchSize;
 
   public ExecutionPayloadEnvelopesByRangeMessageHandler(
       final Spec spec,
@@ -98,22 +73,14 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandler
       final CombinedChainDataClient combinedChainDataClient,
       final ExecutionPayloadEnvelopesRequestLimiter requestLimiter,
       final int unblindingBatchSize) {
-    this.spec = spec;
+    super(
+        spec,
+        combinedChainDataClient,
+        metricsSystem,
+        requestLimiter,
+        unblindingBatchSize,
+        "by_range");
     this.config = config;
-    this.combinedChainDataClient = combinedChainDataClient;
-    this.requestLimiter = requestLimiter;
-    this.unblindingBatchSize = unblindingBatchSize;
-    requestCounter =
-        metricsSystem.createLabelledCounter(
-            TekuMetricCategory.NETWORK,
-            "rpc_execution_payload_envelopes_by_range_requests_total",
-            "Total number of execution payload envelopes by range requests received",
-            "status");
-    totalExecutionPayloadEnvelopesRequestedCounter =
-        metricsSystem.createCounter(
-            TekuMetricCategory.NETWORK,
-            "rpc_execution_payload_envelopes_by_range_requested_envelopes_total",
-            "Total number of execution payload envelopes requested in accepted execution payload envelopes by range requests from peers");
   }
 
   @Override
@@ -139,33 +106,23 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandler
   }
 
   @Override
-  public void onIncomingMessage(
-      final String protocolId,
-      final Eth2Peer peer,
+  protected long getRequestedCount(final ExecutionPayloadEnvelopesByRangeRequestMessage message) {
+    return message.getCount().longValue();
+  }
+
+  @Override
+  protected RequestState createRequestState(
       final ExecutionPayloadEnvelopesByRangeRequestMessage message,
       final ResponseCallback<SignedExecutionPayloadEnvelope> callback) {
     final UInt64 startSlot = message.getStartSlot();
     final UInt64 count = message.getCount();
-    LOG.trace(
-        "Peer {} requested {} execution payload envelopes starting at slot {}",
-        peer.getId(),
-        count,
-        startSlot);
-
-    final Optional<RequestKey> maybeRequestKey =
-        peer.approveExecutionPayloadEnvelopesRequest(callback, count.longValue());
-
-    if (!peer.approveRequest() || maybeRequestKey.isEmpty()) {
-      requestCounter.labels("rate_limited").inc();
-      return;
-    }
 
     // Trim the requested range down to the slots we are required to serve. Retrieving an envelope
     // for a finalized block requires reading the blinded envelope from the database and unblinding
     // it with an execution layer round trip, so slots outside the servable range are dropped before
     // any of that work is done. The count is reduced along with the start slot so that we never
     // respond with envelopes from outside the range the peer asked for.
-    final UInt64 minServableSlot = getMinServableSlot();
+    final UInt64 minServableSlot = spec.computeStartSlotAtEpoch(getMinServableEpoch());
     final UInt64 adjustedStartSlot = startSlot.max(minServableSlot);
     final UInt64 adjustedCount = count.minusMinZero(adjustedStartSlot.minusMinZero(startSlot));
 
@@ -192,56 +149,14 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandler
                 .orElse(ZERO)
             : hotNodes.lastKey();
 
-    final RequestState requestState =
-        new RequestState(callback, adjustedStartSlot, adjustedCount, headSlot, hotNodes);
-
-    // Envelopes of finalized blocks are unblinded through the execution layer, so only a bounded
-    // number of requests needing that is served at a time. Requests served entirely from the head
-    // chain are cheap and are never held back by that cap.
-    final boolean needsUnblinding = requestState.hasFinalizedSlotsToWalk();
-    if (needsUnblinding && !requestLimiter.tryAcquire()) {
-      requestCounter.labels("concurrency_limited").inc();
-      callback.completeWithErrorResponse(
-          new ResourceUnavailableException(
-              "Too many execution payload envelope requests are being served"));
-      return;
-    }
-    requestCounter.labels("ok").inc();
-    totalExecutionPayloadEnvelopesRequestedCounter.inc(count.longValue());
-
-    SafeFuture<RequestState> response =
-        sendFinalizedExecutionPayloadEnvelopes(requestState)
-            .thenCompose(this::sendHotExecutionPayloadEnvelopes);
-    if (needsUnblinding) {
-      response = response.alwaysRun(requestLimiter::release);
-    }
-
-    response.finish(
-        __ -> {
-          // The peer is charged for every slot walked rather than for the envelopes sent: each
-          // walked slot cost a lookup and, below the head chain, an execution layer round trip,
-          // whether or not an envelope came out of it. Only slots never walked are refunded.
-          if (requestState.getWalkedSlots() != count.longValue()) {
-            peer.adjustExecutionPayloadEnvelopesRequest(
-                maybeRequestKey.get(), requestState.getWalkedSlots());
-          }
-          callback.completeSuccessfully();
-        },
-        err -> handleError(err, callback, "execution payload envelopes by range"));
+    return new RequestState(
+        callback, count.longValue(), adjustedStartSlot, adjustedCount, headSlot, hotNodes);
   }
 
-  /**
-   * The first slot we are required to serve envelopes for: the start of the earliest epoch within
-   * {@code MIN_EPOCHS_FOR_BLOCK_REQUESTS} of the current epoch, never earlier than the Gloas fork.
-   */
-  private UInt64 getMinServableSlot() {
-    final UInt64 currentEpoch =
-        combinedChainDataClient.getRecentChainData().getCurrentEpoch().orElse(ZERO);
-    final UInt64 minServableEpoch =
-        currentEpoch
-            .minusMinZero(spec.getNetworkingConfig().getMinEpochsForBlockRequests())
-            .max(spec.getSpecConfig(currentEpoch).getGloasForkEpoch());
-    return spec.computeStartSlotAtEpoch(minServableEpoch);
+  @Override
+  protected SafeFuture<Void> serve(final RequestState requestState) {
+    return sendFinalizedExecutionPayloadEnvelopes(requestState)
+        .thenCompose(__ -> sendHotExecutionPayloadEnvelopes(requestState));
   }
 
   /**
@@ -251,17 +166,22 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandler
    * retrieved with a single execution layer round trip. Each batch is sent before the next one is
    * retrieved and nothing more is retrieved once the peer has closed the stream.
    */
-  private SafeFuture<RequestState> sendFinalizedExecutionPayloadEnvelopes(
-      final RequestState requestState) {
+  private SafeFuture<Void> sendFinalizedExecutionPayloadEnvelopes(final RequestState requestState) {
     if (!requestState.hasFinalizedSlotsToWalk()) {
-      return completedFuture(requestState);
+      return SafeFuture.COMPLETE;
     }
     if (requestState.isStreamClosed()) {
       return SafeFuture.failedFuture(new StreamClosedException());
     }
     final List<UInt64> slots = requestState.takeNextFinalizedSlots(unblindingBatchSize);
     return resolveFinalizedBlockRoots(slots)
-        .thenCompose(this::loadFinalizedExecutionPayloadEnvelopes)
+        .thenCompose(
+            blocks ->
+                loadExecutionPayloadEnvelopes(
+                    blocks,
+                    SlotAndBlockRoot::getBlockRoot,
+                    (block, executionPayload) ->
+                        executionPayload.getSlot().equals(block.getSlot())))
         .thenCompose(requestState::sendExecutionPayloadEnvelopes)
         .thenCompose(__ -> sendFinalizedExecutionPayloadEnvelopes(requestState));
   }
@@ -285,35 +205,8 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandler
     return blockRoots;
   }
 
-  /**
-   * Retrieves the envelopes of all the blocks with one lookup and returns them in slot order,
-   * leaving out any envelope that is not for the slot it was requested for.
-   */
-  private SafeFuture<List<SignedExecutionPayloadEnvelope>> loadFinalizedExecutionPayloadEnvelopes(
-      final List<SlotAndBlockRoot> blocks) {
-    if (blocks.isEmpty()) {
-      return completedFuture(List.of());
-    }
-    final Set<Bytes32> blockRoots =
-        blocks.stream().map(SlotAndBlockRoot::getBlockRoot).collect(Collectors.toSet());
-    return combinedChainDataClient
-        .getExecutionPayloadsByBlockRoots(blockRoots)
-        .thenApply(
-            executionPayloads ->
-                blocks.stream()
-                    .map(
-                        block ->
-                            Optional.ofNullable(executionPayloads.get(block.getBlockRoot()))
-                                .filter(
-                                    executionPayload ->
-                                        executionPayload.getSlot().equals(block.getSlot())))
-                    .flatMap(Optional::stream)
-                    .toList());
-  }
-
   /** Serves the slots on the head chain one at a time, from the hot store. */
-  private SafeFuture<RequestState> sendHotExecutionPayloadEnvelopes(
-      final RequestState requestState) {
+  private SafeFuture<Void> sendHotExecutionPayloadEnvelopes(final RequestState requestState) {
     SafeFuture<Boolean> executionPayloadFuture =
         processNextHotExecutionPayloadEnvelope(requestState);
     // Avoid risk of StackOverflowException by iterating when the future is already complete, as
@@ -322,15 +215,13 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandler
     // separate thread so doesn't recurse on the same stack.
     while (executionPayloadFuture.isDone() && !executionPayloadFuture.isCompletedExceptionally()) {
       if (executionPayloadFuture.join()) {
-        return completedFuture(requestState);
+        return SafeFuture.COMPLETE;
       }
       executionPayloadFuture = processNextHotExecutionPayloadEnvelope(requestState);
     }
     return executionPayloadFuture.thenCompose(
         complete ->
-            complete
-                ? completedFuture(requestState)
-                : sendHotExecutionPayloadEnvelopes(requestState));
+            complete ? SafeFuture.COMPLETE : sendHotExecutionPayloadEnvelopes(requestState));
   }
 
   /** Serves the next slot on the head chain and returns true if the request is now complete. */
@@ -343,8 +234,7 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandler
       return SafeFuture.failedFuture(new StreamClosedException());
     }
     // Ensure execution payloads are loaded off of the event thread
-    return requestState
-        .loadNextHotExecutionPayloadEnvelope()
+    return loadHotExecutionPayloadEnvelope(requestState.getCurrentSlot(), requestState)
         .thenCompose(
             maybeExecutionPayload ->
                 maybeExecutionPayload
@@ -357,27 +247,63 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandler
             });
   }
 
-  @VisibleForTesting
-  class RequestState {
+  private SafeFuture<Optional<SignedExecutionPayloadEnvelope>> loadHotExecutionPayloadEnvelope(
+      final UInt64 slot, final RequestState requestState) {
+    final Optional<ForkChoiceNode> maybeKnownNode = requestState.getKnownNode(slot);
+    if (maybeKnownNode.isEmpty()) {
+      // Unknown root above the finalized slots means this is an empty slot (or payload absent)
+      return completedFuture(Optional.empty());
+    }
+    final ForkChoiceNode knownNode = maybeKnownNode.get();
+    if (knownNode.payloadStatus() != PAYLOAD_STATUS_FULL) {
+      // The payload is not part of the head chain: the next block built on the EMPTY variant, or
+      // the head itself is EMPTY or PENDING because fork choice has not selected its payload. Its
+      // envelope must not be served even if we hold it.
+      return completedFuture(Optional.empty());
+    }
+    // Known node whose payload is part of the chain so lookup by root
+    return combinedChainDataClient
+        .getExecutionPayloadByBlockRoot(knownNode.blockRoot())
+        .thenApply(
+            maybeExecutionPayload ->
+                maybeExecutionPayload.filter(
+                    executionPayload -> executionPayload.getSlot().equals(slot)));
+  }
 
-    private final ResponseCallback<SignedExecutionPayloadEnvelope> callback;
+  /** The cursor over the requested slots: those below the head chain first, then those on it. */
+  static class RequestState extends ExecutionPayloadEnvelopesRequestState {
+
     private final UInt64 headSlot;
     private final NavigableMap<UInt64, ForkChoiceNode> knownNodes;
     private UInt64 currentSlot;
     private UInt64 remainingSlots;
-    private long walkedSlots = 0;
 
     RequestState(
         final ResponseCallback<SignedExecutionPayloadEnvelope> callback,
+        final long requestedCount,
         final UInt64 startSlot,
         final UInt64 count,
         final UInt64 headSlot,
         final NavigableMap<UInt64, ForkChoiceNode> knownNodes) {
-      this.callback = callback;
+      super(callback, requestedCount);
       this.currentSlot = startSlot;
       this.remainingSlots = count;
       this.headSlot = headSlot;
       this.knownNodes = knownNodes;
+    }
+
+    /** Only slots below the head chain need envelopes unblinded through the execution layer. */
+    @Override
+    boolean needsUnblinding() {
+      return hasFinalizedSlotsToWalk();
+    }
+
+    UInt64 getCurrentSlot() {
+      return currentSlot;
+    }
+
+    Optional<ForkChoiceNode> getKnownNode(final UInt64 slot) {
+      return Optional.ofNullable(knownNodes.get(slot));
     }
 
     /** Whether the walk has further slots to serve, up to the requested count and our head. */
@@ -397,14 +323,6 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandler
       return hasMoreSlotsToWalk() && isFinalizedSlot(currentSlot);
     }
 
-    boolean isStreamClosed() {
-      return callback.isClosed();
-    }
-
-    long getWalkedSlots() {
-      return walkedSlots;
-    }
-
     /**
      * Takes up to {@code maxSlots} of the next finalized slots of the walk, marking them walked.
      */
@@ -417,47 +335,11 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandler
       return slots;
     }
 
+    /** Moves past the current slot, charging the peer for it whether or not it had an envelope. */
     void onSlotWalked() {
       currentSlot = currentSlot.increment();
       remainingSlots = remainingSlots.minusMinZero(1);
-      walkedSlots++;
-    }
-
-    SafeFuture<Void> sendExecutionPayloadEnvelope(
-        final SignedExecutionPayloadEnvelope executionPayloadEnvelope) {
-      return callback.respond(executionPayloadEnvelope);
-    }
-
-    SafeFuture<Void> sendExecutionPayloadEnvelopes(
-        final List<SignedExecutionPayloadEnvelope> executionPayloadEnvelopes) {
-      SafeFuture<Void> sent = SafeFuture.COMPLETE;
-      for (final SignedExecutionPayloadEnvelope executionPayloadEnvelope :
-          executionPayloadEnvelopes) {
-        sent = sent.thenCompose(__ -> sendExecutionPayloadEnvelope(executionPayloadEnvelope));
-      }
-      return sent;
-    }
-
-    SafeFuture<Optional<SignedExecutionPayloadEnvelope>> loadNextHotExecutionPayloadEnvelope() {
-      final UInt64 slot = this.currentSlot;
-      final ForkChoiceNode knownNode = knownNodes.get(slot);
-      if (knownNode == null) {
-        // Unknown root above the finalized slots means this is an empty slot (or payload absent)
-        return completedFuture(Optional.empty());
-      }
-      if (knownNode.payloadStatus() != PAYLOAD_STATUS_FULL) {
-        // The payload is not part of the head chain: the next block built on the EMPTY variant,
-        // or the head itself is EMPTY or PENDING because fork choice has not selected its
-        // payload. Its envelope must not be served even if we hold it.
-        return completedFuture(Optional.empty());
-      }
-      // Known node whose payload is part of the chain so lookup by root
-      return combinedChainDataClient
-          .getExecutionPayloadByBlockRoot(knownNode.blockRoot())
-          .thenApply(
-              maybeExecutionPayload ->
-                  maybeExecutionPayload.filter(
-                      executionPayload -> executionPayload.getSlot().equals(slot)));
+      charge(1);
     }
   }
 }
