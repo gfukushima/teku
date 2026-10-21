@@ -16,6 +16,7 @@ package tech.pegasys.teku.storage.server.kvstore;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.tuple;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
@@ -44,6 +45,7 @@ import tech.pegasys.teku.infrastructure.unsigned.UInt64;
 import tech.pegasys.teku.spec.Spec;
 import tech.pegasys.teku.spec.TestSpecFactory;
 import tech.pegasys.teku.spec.datastructures.blocks.SignedBlockAndState;
+import tech.pegasys.teku.spec.datastructures.epbs.versions.gloas.SignedBlindedExecutionPayloadEnvelope;
 import tech.pegasys.teku.spec.datastructures.lightclient.LightClientUpdate;
 import tech.pegasys.teku.spec.datastructures.state.AnchorPoint;
 import tech.pegasys.teku.spec.datastructures.state.Checkpoint;
@@ -166,23 +168,42 @@ class KvStoreDatabaseTest {
   }
 
   @Test
-  void update_shouldDeleteOrphanedEnvelopeInTheSameTransactionAsTheFinalizedBlock() {
+  void update_shouldWriteAndDeleteEnvelopesInTheSameTransactionAsTheFinalizedBlockInPruneMode() {
+    assertEnvelopesAreUpdatedInTheSameTransactionAsTheFinalizedBlock(StateStorageMode.PRUNE);
+  }
+
+  @Test
+  void update_shouldWriteAndDeleteEnvelopesInTheSameTransactionAsTheFinalizedBlockInArchiveMode() {
+    assertEnvelopesAreUpdatedInTheSameTransactionAsTheFinalizedBlock(StateStorageMode.ARCHIVE);
+  }
+
+  private void assertEnvelopesAreUpdatedInTheSameTransactionAsTheFinalizedBlock(
+      final StateStorageMode storageMode) {
     final Spec gloasSpec = TestSpecFactory.createMinimalGloas();
     final ChainBuilder chainBuilder = ChainBuilder.create(gloasSpec);
-    chainBuilder.generateGenesis();
+    final SignedBlockAndState genesis = chainBuilder.generateGenesis();
     final SignedBlockAndState parent = chainBuilder.generateBlockAtSlot(1);
     // The child builds on the EMPTY variant of the parent, so the parent's envelope is orphaned
     final SignedBlockAndState child =
         chainBuilder.generateBlockAtSlot(
             2, chainBuilder.createBlockOptionsBuildingOnEmptyParent(UInt64.valueOf(2)));
+    final SignedBlindedExecutionPayloadEnvelope parentEnvelope =
+        chainBuilder.getExecutionPayloadAtSlot(parent.getSlot()).orElseThrow().blind(gloasSpec);
+    final SignedBlindedExecutionPayloadEnvelope childEnvelope =
+        chainBuilder.getExecutionPayloadAtSlot(child.getSlot()).orElseThrow().blind(gloasSpec);
+    final Checkpoint anchor = new Checkpoint(UInt64.ZERO, genesis.getRoot());
     final KvStoreCombinedDao dao = mock(KvStoreCombinedDao.class);
-    when(dao.getAnchor()).thenReturn(Optional.empty());
+    when(dao.getAnchor()).thenReturn(Optional.of(anchor));
+    when(dao.getFinalizedCheckpoint()).thenReturn(Optional.of(anchor));
     when(dao.getHotBlock(any())).thenReturn(Optional.empty());
+    when(dao.getHotBlock(genesis.getRoot())).thenReturn(Optional.of(genesis.getBlock()));
+    when(dao.getHotBlockAsSsz(any())).thenReturn(Optional.empty());
+    when(dao.getHotState(any())).thenReturn(Optional.empty());
     when(dao.getFinalizedBlock(any())).thenReturn(Optional.empty());
     final FinalizedUpdater finalizedUpdater = mock(FinalizedUpdater.class);
     final HotUpdater hotUpdater = mock(HotUpdater.class);
     final KvStoreDatabase database =
-        new KvStoreDatabase(dao, StateStorageMode.PRUNE, false, gloasSpec) {
+        new KvStoreDatabase(dao, storageMode, false, gloasSpec) {
           @Override
           protected FinalizedUpdater finalizedUpdater() {
             return finalizedUpdater;
@@ -197,9 +218,13 @@ class KvStoreDatabaseTest {
         FinalizedChainData.builder()
             .latestFinalized(AnchorPoint.fromInitialBlockAndState(gloasSpec, child))
             .finalizedChildAndParent(parent.getRoot(), parent.getParentRoot())
+            // The previously finalized block is part of every finalization, as the base of the
+            // finalized chain
+            .finalizedChildAndParent(genesis.getRoot(), genesis.getParentRoot())
             .finalizedBlock(parent.getBlock())
             .build();
 
+    // Both envelopes arrive with the finalization of their blocks
     database.update(
         new StorageUpdate(
             Optional.empty(),
@@ -208,7 +233,7 @@ class KvStoreDatabaseTest {
             Optional.empty(),
             Map.of(),
             Map.of(),
-            Map.of(),
+            Map.of(parent.getRoot(), parentEnvelope, child.getRoot(), childEnvelope),
             Map.of(),
             Optional.empty(),
             Map.of(),
@@ -221,12 +246,20 @@ class KvStoreDatabaseTest {
             false,
             true));
 
-    // The envelope is deleted by the transaction that writes the finalized block, before that
-    // transaction commits, and no separate envelope transaction is needed
-    final InOrder inOrder = inOrder(finalizedUpdater);
-    inOrder.verify(finalizedUpdater).addFinalizedBlock(parent.getBlock());
-    inOrder.verify(finalizedUpdater).deleteBlindedExecutionPayloadEnvelope(parent.getRoot());
-    inOrder.verify(finalizedUpdater).commit();
+    // The orphaned envelope is deleted, and the chain's envelope written, by the transaction that
+    // writes the respective block, before it commits; no separate envelope transaction is needed
+    final InOrder parentOrder = inOrder(finalizedUpdater);
+    parentOrder.verify(finalizedUpdater).addFinalizedBlock(parent.getBlock());
+    parentOrder.verify(finalizedUpdater).deleteBlindedExecutionPayloadEnvelope(parent.getRoot());
+    parentOrder.verify(finalizedUpdater).commit();
+    final InOrder childOrder = inOrder(finalizedUpdater);
+    childOrder.verify(finalizedUpdater).addFinalizedBlock(child.getBlock());
+    childOrder
+        .verify(finalizedUpdater)
+        .addBlindedExecutionPayloadEnvelope(child.getRoot(), childEnvelope);
+    childOrder.verify(finalizedUpdater).commit();
+    verify(finalizedUpdater, never())
+        .addBlindedExecutionPayloadEnvelope(eq(parent.getRoot()), any());
     verify(finalizedUpdater, times(1)).commit();
   }
 

@@ -234,6 +234,16 @@ public class ForkChoiceStrategyTest extends AbstractBlockMetadataStoreTest {
             strategy.getAncestorNodes(
                 ForkChoiceNode.createBase(dataStructureUtil.randomBytes32()), ZERO, ONE))
         .isEmpty();
+    // A range below the node is reached by skipping the chain above it
+    assertThat(strategy.getAncestorNodes(baseBlock2, ZERO, UInt64.valueOf(2)))
+        .containsExactly(
+            entry(UInt64.ZERO, ForkChoiceNode.createBase(genesis.getRoot())),
+            entry(ONE, emptyBlock1));
+    // A variant that is not in the protoarray is still reported for its block's slot, as the
+    // default walk does, and ends the walk
+    final ForkChoiceNode missingFullBlock2 = ForkChoiceNode.createFull(block2.getRoot());
+    assertThat(strategy.getAncestorNodes(missingFullBlock2, ZERO, UInt64.valueOf(3)))
+        .containsExactly(entry(UInt64.valueOf(2), missingFullBlock2));
   }
 
   @Test

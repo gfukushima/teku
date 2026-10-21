@@ -1697,7 +1697,8 @@ public class KvStoreDatabase implements Database {
                 update.getDeletedHotBlocks())
             : Set.of();
 
-    // Update finalized blocks and states
+    // Update finalized blocks and states. Envelopes of the finalized blocks are written and the
+    // orphaned ones deleted in the same transactions as the blocks.
     final Optional<SlotAndExecutionPayloadSummary> finalizedOptimisticExecutionPayload =
         updateFinalizedData(
             update.getFinalizedChildToParentMap(),
@@ -1706,24 +1707,34 @@ public class KvStoreDatabase implements Database {
             update.getDeletedHotBlocks(),
             update.isFinalizedOptimisticTransitionBlockRootSet(),
             update.getOptimisticTransitionBlockRoot(),
+            update.getBlindedExecutionPayloads(),
             orphanedExecutionPayloadRoots);
 
     if (update.isExecutionPayloadEnvelopesEnabled()) {
-      // Envelopes are also dropped for pruned non-canonical blocks, and for an orphaned root that
-      // is not written as a finalized block by this update (the parent of the oldest pair, which
-      // was finalized earlier). An envelope arriving in the same update as the finalization of
-      // its orphaned block is not stored at all.
+      final Map<Bytes32, Bytes32> finalizedChildToParentMap = update.getFinalizedChildToParentMap();
+      // Envelopes of pruned non-canonical blocks are dropped here, as is the envelope of an
+      // orphaned root that is not a key of the finalized map: the previously finalized block,
+      // which prune mode does not write again (archive mode does, making this a harmless repeat).
       final Set<Bytes32> prunedExecutionPayloadRoots =
           Stream.concat(
                   update.getDeletedHotBlocks().keySet().stream()
-                      .filter(root -> !update.getFinalizedChildToParentMap().containsKey(root)),
+                      .filter(root -> !finalizedChildToParentMap.containsKey(root)),
                   orphanedExecutionPayloadRoots.stream()
-                      .filter(root -> !update.getFinalizedChildToParentMap().containsKey(root)))
+                      .filter(root -> !finalizedChildToParentMap.containsKey(root)))
               .collect(Collectors.toSet());
+      // Envelopes of blocks that are not being finalized are written here. Those of the finalized
+      // blocks were written with their blocks, and the envelope of an orphaned block arriving in
+      // the same update as its finalization is not stored at all. The common update finalizes
+      // nothing and passes its envelopes straight through.
       final Map<Bytes32, SignedBlindedExecutionPayloadEnvelope> blindedExecutionPayloads =
-          update.getBlindedExecutionPayloads().entrySet().stream()
-              .filter(entry -> !orphanedExecutionPayloadRoots.contains(entry.getKey()))
-              .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+          finalizedChildToParentMap.isEmpty() && orphanedExecutionPayloadRoots.isEmpty()
+              ? update.getBlindedExecutionPayloads()
+              : update.getBlindedExecutionPayloads().entrySet().stream()
+                  .filter(
+                      entry ->
+                          !finalizedChildToParentMap.containsKey(entry.getKey())
+                              && !orphanedExecutionPayloadRoots.contains(entry.getKey()))
+                  .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
       updateBlindedExecutionPayloads(blindedExecutionPayloads, prunedExecutionPayloadRoots);
     }
 
@@ -1822,6 +1833,7 @@ public class KvStoreDatabase implements Database {
       final Map<Bytes32, UInt64> deletedHotBlocksRootsWithSlot,
       final boolean isFinalizedOptimisticBlockRootSet,
       final Optional<Bytes32> finalizedOptimisticTransitionBlockRoot,
+      final Map<Bytes32, SignedBlindedExecutionPayloadEnvelope> blindedExecutionPayloads,
       final Set<Bytes32> orphanedExecutionPayloadRoots) {
     if (finalizedChildToParentMap.isEmpty()) {
       // Nothing to do
@@ -1836,10 +1848,14 @@ public class KvStoreDatabase implements Database {
           finalizedChildToParentMap,
           finalizedBlocks,
           finalizedStates,
+          blindedExecutionPayloads,
           orphanedExecutionPayloadRoots);
     } else {
       updateFinalizedDataPruneMode(
-          finalizedChildToParentMap, finalizedBlocks, orphanedExecutionPayloadRoots);
+          finalizedChildToParentMap,
+          finalizedBlocks,
+          blindedExecutionPayloads,
+          orphanedExecutionPayloadRoots);
     }
 
     storeNonCanonicalBlocks(deletedHotBlocksRootsWithSlot.keySet(), finalizedChildToParentMap);
@@ -1968,6 +1984,7 @@ public class KvStoreDatabase implements Database {
       final Map<Bytes32, Bytes32> finalizedChildToParentMap,
       final Map<Bytes32, SignedBeaconBlock> finalizedBlocks,
       final Map<Bytes32, BeaconState> finalizedStates,
+      final Map<Bytes32, SignedBlindedExecutionPayloadEnvelope> blindedExecutionPayloads,
       final Set<Bytes32> orphanedExecutionPayloadRoots) {
 
     final Optional<Checkpoint> initialCheckpoint = dao.getAnchor();
@@ -1996,7 +2013,8 @@ public class KvStoreDatabase implements Database {
 
           final Optional<UInt64> maybeBlockSlot =
               addFinalizedBlock(blockRoot, finalizedBlocks, updater, initialBlockRoot);
-          deleteOrphanedExecutionPayload(blockRoot, orphanedExecutionPayloadRoots, updater);
+          updateExecutionPayloadEnvelopeOfFinalizedBlock(
+              blockRoot, blindedExecutionPayloads, orphanedExecutionPayloadRoots, updater);
 
           Optional.ofNullable(finalizedStates.get(blockRoot))
               .or(() -> getHotState(blockRoot))
@@ -2022,6 +2040,7 @@ public class KvStoreDatabase implements Database {
   private void updateFinalizedDataPruneMode(
       final Map<Bytes32, Bytes32> finalizedChildToParentMap,
       final Map<Bytes32, SignedBeaconBlock> finalizedBlocks,
+      final Map<Bytes32, SignedBlindedExecutionPayloadEnvelope> blindedExecutionPayloads,
       final Set<Bytes32> orphanedExecutionPayloadRoots) {
     final Optional<Bytes32> initialBlockRoot = dao.getAnchor().map(Checkpoint::getRoot);
 
@@ -2034,7 +2053,8 @@ public class KvStoreDatabase implements Database {
           final Bytes32 root = finalizedRoots.get(i);
 
           addFinalizedBlock(root, finalizedBlocks, updater, initialBlockRoot);
-          deleteOrphanedExecutionPayload(root, orphanedExecutionPayloadRoots, updater);
+          updateExecutionPayloadEnvelopeOfFinalizedBlock(
+              root, blindedExecutionPayloads, orphanedExecutionPayloadRoots, updater);
 
           i++;
         }
@@ -2142,16 +2162,21 @@ public class KvStoreDatabase implements Database {
   }
 
   /**
-   * Deletes the blinded envelope of a finalized block whose payload the chain did not build on in
-   * the same transaction that writes the block, so that neither can be committed without the other.
+   * Writes or deletes the blinded envelope of a finalized block in the same transaction that writes
+   * the block, so that neither can be committed without the other: deleted when the chain did not
+   * build on the payload, written when it arrived in this update and the chain did.
    */
-  private void deleteOrphanedExecutionPayload(
+  private void updateExecutionPayloadEnvelopeOfFinalizedBlock(
       final Bytes32 blockRoot,
+      final Map<Bytes32, SignedBlindedExecutionPayloadEnvelope> blindedExecutionPayloads,
       final Set<Bytes32> orphanedExecutionPayloadRoots,
       final FinalizedUpdater updater) {
     if (orphanedExecutionPayloadRoots.contains(blockRoot)) {
       updater.deleteBlindedExecutionPayloadEnvelope(blockRoot);
+      return;
     }
+    Optional.ofNullable(blindedExecutionPayloads.get(blockRoot))
+        .ifPresent(envelope -> updater.addBlindedExecutionPayloadEnvelope(blockRoot, envelope));
   }
 
   private void updateBlindedExecutionPayloads(
