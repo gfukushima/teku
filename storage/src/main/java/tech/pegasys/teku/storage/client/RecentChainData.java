@@ -733,9 +733,13 @@ public abstract class RecentChainData
   }
 
   public boolean containsExecutionPayload(final Bytes32 blockRoot) {
-    return Optional.ofNullable(store)
-        .map(s -> s.getExecutionPayloadIfAvailable(blockRoot).isPresent())
-        .orElse(false);
+    return getExecutionPayloadIfAvailable(blockRoot).isPresent();
+  }
+
+  /** Returns the execution payload envelope held in the hot store, without any fallback lookup. */
+  public Optional<SignedExecutionPayloadEnvelope> getExecutionPayloadIfAvailable(
+      final Bytes32 blockRoot) {
+    return Optional.ofNullable(store).flatMap(s -> s.getExecutionPayloadIfAvailable(blockRoot));
   }
 
   public Optional<UInt64> getSlotForBlockRoot(final Bytes32 root) {

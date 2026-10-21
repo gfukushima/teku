@@ -16,9 +16,11 @@ package tech.pegasys.teku.networking.eth2.rpc.beaconchain.methods;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -32,14 +34,20 @@ import static tech.pegasys.teku.spec.datastructures.forkchoice.ForkChoicePayload
 import static tech.pegasys.teku.spec.datastructures.forkchoice.ForkChoicePayloadStatus.PAYLOAD_STATUS_FULL;
 import static tech.pegasys.teku.spec.datastructures.forkchoice.ForkChoicePayloadStatus.PAYLOAD_STATUS_PENDING;
 
+import com.google.common.base.Throwables;
+import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import org.apache.tuweni.bytes.Bytes32;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
 import tech.pegasys.teku.infrastructure.async.SafeFuture;
 import tech.pegasys.teku.infrastructure.metrics.StubMetricsSystem;
 import tech.pegasys.teku.infrastructure.metrics.TekuMetricCategory;
@@ -50,6 +58,7 @@ import tech.pegasys.teku.networking.eth2.rpc.beaconchain.BeaconChainMethodIds;
 import tech.pegasys.teku.networking.eth2.rpc.core.ResponseCallback;
 import tech.pegasys.teku.networking.eth2.rpc.core.RpcException;
 import tech.pegasys.teku.networking.eth2.rpc.core.encodings.RpcEncoding;
+import tech.pegasys.teku.networking.p2p.rpc.StreamClosedException;
 import tech.pegasys.teku.spec.Spec;
 import tech.pegasys.teku.spec.TestSpecFactory;
 import tech.pegasys.teku.spec.config.SpecConfigGloas;
@@ -70,16 +79,23 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandlerTest {
 
   private static final String PROTOCOL_ID =
       BeaconChainMethodIds.getExecutionPayloadEnvelopesByRangeMethodId(1, RPC_ENCODING);
+  // Small batches so that batching is exercised with short chains
+  private static final int UNBLINDING_BATCH_SIZE = 2;
   private final StubMetricsSystem metricsSystem = new StubMetricsSystem();
   private final CombinedChainDataClient combinedChainDataClient =
       mock(CombinedChainDataClient.class);
   private final RecentChainData recentChainData = mock(RecentChainData.class);
+  // A single request may be served at a time
+  private final ExecutionPayloadEnvelopesRequestLimiter requestLimiter =
+      new ExecutionPayloadEnvelopesRequestLimiter(1);
   private final ExecutionPayloadEnvelopesByRangeMessageHandler handler =
       new ExecutionPayloadEnvelopesByRangeMessageHandler(
           spec,
           SpecConfigGloas.required(spec.getGenesisSpecConfig()),
           metricsSystem,
-          combinedChainDataClient);
+          combinedChainDataClient,
+          requestLimiter,
+          UNBLINDING_BATCH_SIZE);
   final Eth2Peer peer = mock(Eth2Peer.class);
 
   @SuppressWarnings("unchecked")
@@ -105,6 +121,9 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandlerTest {
     when(combinedChainDataClient.getExecutionPayloadByBlockRoot(any()))
         .thenAnswer(
             i -> SafeFuture.completedFuture(chainBuilder.getExecutionPayload(i.getArgument(0))));
+    when(combinedChainDataClient.getExecutionPayloadsByBlockRoots(any()))
+        .thenAnswer(
+            i -> SafeFuture.completedFuture(getExecutionPayloadsByBlockRoots(i.getArgument(0))));
 
     when(callback.respond(any())).thenReturn(SafeFuture.COMPLETE);
   }
@@ -199,7 +218,7 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandlerTest {
 
     // Requesting 5 execution payload envelopes
     verify(peer).approveExecutionPayloadEnvelopesRequest(any(), eq(5L));
-    // Sending 4 execution payload envelopes: Rate limiter adjustment required
+    // Only the 4 slots up to the head are walked: Rate limiter adjustment required
     verify(peer).adjustExecutionPayloadEnvelopesRequest(any(), eq(4L));
     verify(callback, times(4)).respond(any());
 
@@ -231,8 +250,203 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandlerTest {
       verify(callback).respond(executionPayloadEnvelope);
       verify(combinedChainDataClient).getBlockAtSlotExact(executionPayloadEnvelope.getSlot());
     }
+    // Finalized envelopes are never looked up one root at a time
+    verify(combinedChainDataClient, never()).getExecutionPayloadByBlockRoot(any());
     verify(callback).completeSuccessfully();
+    // All 5 requested slots were walked, so the peer is charged for all of them
+    verify(peer, never()).adjustExecutionPayloadEnvelopesRequest(any(), anyLong());
     assertThat(getLabelledCounterValue("ok")).isOne();
+  }
+
+  @Test
+  public void onIncomingMessage_shouldUnblindFinalizedEnvelopesInBatchesInSlotOrder() {
+    final List<SignedExecutionPayloadEnvelope> envelopes = buildChain(6);
+    stubFinalizedChainHeadAndBlockLookup(UInt64.valueOf(6));
+
+    final ExecutionPayloadEnvelopesByRangeRequestMessage message =
+        new ExecutionPayloadEnvelopesByRangeRequestMessage(UInt64.ONE, UInt64.valueOf(5));
+    handler.onIncomingMessage(PROTOCOL_ID, peer, message, callback);
+
+    // The slots of each batch are resolved to block roots and their envelopes are retrieved with
+    // one call, each batch being sent before the next one is retrieved
+    final InOrder inOrder = inOrder(combinedChainDataClient, callback);
+    inOrder
+        .verify(combinedChainDataClient)
+        .getExecutionPayloadsByBlockRoots(blockRootsAtSlots(1, 2));
+    inOrder.verify(callback).respond(envelopes.get(0));
+    inOrder.verify(callback).respond(envelopes.get(1));
+    inOrder
+        .verify(combinedChainDataClient)
+        .getExecutionPayloadsByBlockRoots(blockRootsAtSlots(3, 4));
+    inOrder.verify(callback).respond(envelopes.get(2));
+    inOrder.verify(callback).respond(envelopes.get(3));
+    inOrder.verify(combinedChainDataClient).getExecutionPayloadsByBlockRoots(blockRootsAtSlots(5));
+    inOrder.verify(callback).respond(envelopes.get(4));
+    inOrder.verify(callback).completeSuccessfully();
+    verify(combinedChainDataClient, times(3)).getExecutionPayloadsByBlockRoots(any());
+    verify(combinedChainDataClient, never()).getExecutionPayloadByBlockRoot(any());
+  }
+
+  @Test
+  public void onIncomingMessage_shouldNotServeBatchedEnvelopeWhoseSlotDoesNotMatch() {
+    final List<SignedExecutionPayloadEnvelope> envelopes = buildChain(6);
+    stubFinalizedChainHeadAndBlockLookup(UInt64.valueOf(6));
+    // The envelope retrieved for the block at slot 2 is the one of slot 3
+    final Bytes32 slot2Root = chainBuilder.getBlockAtSlot(2).getRoot();
+    doAnswer(
+            i -> {
+              final Map<Bytes32, SignedExecutionPayloadEnvelope> result =
+                  getExecutionPayloadsByBlockRoots(i.getArgument(0));
+              if (result.containsKey(slot2Root)) {
+                result.put(slot2Root, envelopes.get(2));
+              }
+              return SafeFuture.completedFuture(result);
+            })
+        .when(combinedChainDataClient)
+        .getExecutionPayloadsByBlockRoots(any());
+
+    final ExecutionPayloadEnvelopesByRangeRequestMessage message =
+        new ExecutionPayloadEnvelopesByRangeRequestMessage(UInt64.ONE, UInt64.valueOf(5));
+    handler.onIncomingMessage(PROTOCOL_ID, peer, message, callback);
+
+    // Nothing is served for slot 2, the envelope of slot 3 is only served for slot 3
+    verify(callback, times(4)).respond(any());
+    verify(callback, never()).respond(envelopes.get(1));
+    verify(callback, times(1)).respond(envelopes.get(2));
+    verify(callback).completeSuccessfully();
+  }
+
+  @Test
+  public void onIncomingMessage_shouldChargeSlotsWalkedEvenWhenNoEnvelopeCouldBeUnblinded() {
+    buildChain(6);
+    stubFinalizedChainHeadAndBlockLookup(UInt64.valueOf(6));
+    // The execution layer has no payload body for any of the requested slots
+    doReturn(SafeFuture.completedFuture(Map.of()))
+        .when(combinedChainDataClient)
+        .getExecutionPayloadsByBlockRoots(any());
+
+    final ExecutionPayloadEnvelopesByRangeRequestMessage message =
+        new ExecutionPayloadEnvelopesByRangeRequestMessage(UInt64.ONE, UInt64.valueOf(5));
+    handler.onIncomingMessage(PROTOCOL_ID, peer, message, callback);
+
+    verify(callback, never()).respond(any());
+    verify(callback).completeSuccessfully();
+    // Every slot cost a database and an execution layer lookup, so none of them is refunded
+    verify(peer, never()).adjustExecutionPayloadEnvelopesRequest(any(), anyLong());
+  }
+
+  @Test
+  public void onIncomingMessage_shouldStopUnblindingFinalizedEnvelopesWhenStreamIsClosed() {
+    final List<SignedExecutionPayloadEnvelope> envelopes = buildChain(6);
+    stubFinalizedChainHeadAndBlockLookup(UInt64.valueOf(6));
+    // The peer resets the stream after the first batch has been sent
+    when(callback.isClosed()).thenReturn(false, true);
+
+    final ExecutionPayloadEnvelopesByRangeRequestMessage message =
+        new ExecutionPayloadEnvelopesByRangeRequestMessage(UInt64.ONE, UInt64.valueOf(5));
+    handler.onIncomingMessage(PROTOCOL_ID, peer, message, callback);
+
+    verify(callback, times(2)).respond(any());
+    verify(callback).respond(envelopes.get(0));
+    verify(callback).respond(envelopes.get(1));
+    // No further slot is resolved or unblinded once the stream is closed
+    verify(combinedChainDataClient, times(1)).getExecutionPayloadsByBlockRoots(any());
+    verify(combinedChainDataClient, never()).getBlockAtSlotExact(UInt64.valueOf(3));
+    verify(callback, never()).completeSuccessfully();
+    verify(callback).completeWithUnexpectedError(argThat(this::isStreamClosedError));
+    // The peer abandoned the request so nothing is refunded
+    verify(peer, never()).adjustExecutionPayloadEnvelopesRequest(any(), anyLong());
+  }
+
+  @Test
+  public void onIncomingMessage_shouldStopWalkingHeadChainWhenStreamIsClosed() {
+    final List<SignedExecutionPayloadEnvelope> envelopes = buildChain(5);
+    // The peer resets the stream after two envelopes have been sent
+    when(callback.isClosed()).thenReturn(false, false, true);
+
+    final ExecutionPayloadEnvelopesByRangeRequestMessage message =
+        new ExecutionPayloadEnvelopesByRangeRequestMessage(UInt64.ONE, UInt64.valueOf(5));
+    handler.onIncomingMessage(PROTOCOL_ID, peer, message, callback);
+
+    verify(callback, times(2)).respond(any());
+    verify(callback).respond(envelopes.get(0));
+    verify(callback).respond(envelopes.get(1));
+    verify(combinedChainDataClient, never())
+        .getExecutionPayloadByBlockRoot(chainBuilder.getBlockAtSlot(3).getRoot());
+    verify(callback, never()).completeSuccessfully();
+    verify(callback).completeWithUnexpectedError(argThat(this::isStreamClosedError));
+    verify(peer, never()).adjustExecutionPayloadEnvelopesRequest(any(), anyLong());
+  }
+
+  @Test
+  public void onIncomingMessage_shouldRejectRequestNeedingUnblindingWhenTooManyAreBeingServed() {
+    buildChain(6);
+    stubFinalizedChainHeadAndBlockLookup(UInt64.valueOf(6));
+    // Another request is already being served
+    assertThat(requestLimiter.tryAcquire()).isTrue();
+
+    final ExecutionPayloadEnvelopesByRangeRequestMessage message =
+        new ExecutionPayloadEnvelopesByRangeRequestMessage(UInt64.ONE, UInt64.valueOf(5));
+    handler.onIncomingMessage(PROTOCOL_ID, peer, message, callback);
+
+    verify(callback)
+        .completeWithErrorResponse(any(RpcException.ResourceUnavailableException.class));
+    verify(callback, never()).respond(any());
+    verify(callback, never()).completeSuccessfully();
+    // No work is done for the rejected request
+    verify(combinedChainDataClient, never()).getBlockAtSlotExact(any());
+    verify(combinedChainDataClient, never()).getExecutionPayloadsByBlockRoots(any());
+    // The rejected request still counts against the peer's rate limit
+    verify(peer, never()).adjustExecutionPayloadEnvelopesRequest(any(), anyLong());
+    assertThat(getLabelledCounterValue("concurrency_limited")).isOne();
+    assertThat(getLabelledCounterValue("ok")).isZero();
+  }
+
+  @Test
+  public void onIncomingMessage_shouldServeRequestFromHeadChainWhenTooManyAreBeingServed() {
+    final List<SignedExecutionPayloadEnvelope> envelopes = buildChain(5);
+    // Another request is already being served, but this one needs no unblinding
+    assertThat(requestLimiter.tryAcquire()).isTrue();
+
+    final ExecutionPayloadEnvelopesByRangeRequestMessage message =
+        new ExecutionPayloadEnvelopesByRangeRequestMessage(UInt64.ONE, UInt64.valueOf(5));
+    handler.onIncomingMessage(PROTOCOL_ID, peer, message, callback);
+
+    verify(callback, times(5)).respond(any());
+    for (final SignedExecutionPayloadEnvelope envelope : envelopes) {
+      verify(callback).respond(envelope);
+    }
+    verify(callback).completeSuccessfully();
+    assertThat(getLabelledCounterValue("concurrency_limited")).isZero();
+  }
+
+  @Test
+  public void onIncomingMessage_shouldAdmitNextRequestOnceServed() {
+    buildChain(6);
+    stubFinalizedChainHeadAndBlockLookup(UInt64.valueOf(6));
+
+    final ExecutionPayloadEnvelopesByRangeRequestMessage message =
+        new ExecutionPayloadEnvelopesByRangeRequestMessage(UInt64.ONE, UInt64.valueOf(5));
+    handler.onIncomingMessage(PROTOCOL_ID, peer, message, callback);
+
+    verify(callback).completeSuccessfully();
+    assertThat(requestLimiter.tryAcquire()).isTrue();
+  }
+
+  @Test
+  public void onIncomingMessage_shouldAdmitNextRequestOnceServingFailed() {
+    buildChain(6);
+    stubFinalizedChainHeadAndBlockLookup(UInt64.valueOf(6));
+    doReturn(SafeFuture.failedFuture(new RuntimeException("Execution layer unavailable")))
+        .when(combinedChainDataClient)
+        .getExecutionPayloadsByBlockRoots(any());
+
+    final ExecutionPayloadEnvelopesByRangeRequestMessage message =
+        new ExecutionPayloadEnvelopesByRangeRequestMessage(UInt64.ONE, UInt64.valueOf(5));
+    handler.onIncomingMessage(PROTOCOL_ID, peer, message, callback);
+
+    verify(callback).completeWithUnexpectedError(any());
+    assertThat(requestLimiter.tryAcquire()).isTrue();
   }
 
   @Test
@@ -269,6 +483,8 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandlerTest {
       }
     }
     verify(callback).completeSuccessfully();
+    // The skipped slot was still walked, so the peer is charged for all 5 slots
+    verify(peer, never()).adjustExecutionPayloadEnvelopesRequest(any(), anyLong());
   }
 
   @Test
@@ -376,7 +592,8 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandlerTest {
     verify(combinedChainDataClient, never())
         .getExecutionPayloadByBlockRoot(chainBuilder.getBlockAtSlot(emptySlot).getRoot());
     verify(callback).completeSuccessfully();
-    verify(peer).adjustExecutionPayloadEnvelopesRequest(any(), eq(4L));
+    // All 5 requested slots were walked, so the peer is charged for all of them
+    verify(peer, never()).adjustExecutionPayloadEnvelopesRequest(any(), anyLong());
   }
 
   @Test
@@ -399,7 +616,8 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandlerTest {
       }
     }
     verify(callback).completeSuccessfully();
-    verify(peer).adjustExecutionPayloadEnvelopesRequest(any(), eq(4L));
+    // All 5 requested slots were walked, so the peer is charged for all of them
+    verify(peer, never()).adjustExecutionPayloadEnvelopesRequest(any(), anyLong());
   }
 
   @Test
@@ -423,7 +641,8 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandlerTest {
       }
     }
     verify(callback).completeSuccessfully();
-    verify(peer).adjustExecutionPayloadEnvelopesRequest(any(), eq(4L));
+    // All 5 requested slots were walked, so the peer is charged for all of them
+    verify(peer, never()).adjustExecutionPayloadEnvelopesRequest(any(), anyLong());
   }
 
   @Test
@@ -460,7 +679,8 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandlerTest {
       }
     }
     verify(callback).completeSuccessfully();
-    verify(peer).adjustExecutionPayloadEnvelopesRequest(any(), eq(4L));
+    // All 5 requested slots were walked, so the peer is charged for all of them
+    verify(peer, never()).adjustExecutionPayloadEnvelopesRequest(any(), anyLong());
   }
 
   @Test
@@ -486,6 +706,20 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandlerTest {
         verify(combinedChainDataClient, never()).getBlockAtSlotExact(envelope.getSlot());
       }
     }
+    // Finalized slots are unblinded in one batch, head chain slots are read one by one, in order
+    final InOrder inOrder = inOrder(combinedChainDataClient, callback);
+    inOrder
+        .verify(combinedChainDataClient)
+        .getExecutionPayloadsByBlockRoots(blockRootsAtSlots(1, 2));
+    inOrder.verify(callback).respond(allEnvelopes.get(0));
+    inOrder.verify(callback).respond(allEnvelopes.get(1));
+    inOrder
+        .verify(combinedChainDataClient)
+        .getExecutionPayloadByBlockRoot(chainBuilder.getBlockAtSlot(3).getRoot());
+    inOrder.verify(callback).respond(allEnvelopes.get(2));
+    inOrder.verify(callback).respond(allEnvelopes.get(3));
+    inOrder.verify(callback).respond(allEnvelopes.get(4));
+    verify(combinedChainDataClient, times(1)).getExecutionPayloadsByBlockRoots(any());
     verify(callback).completeSuccessfully();
     verify(peer, never()).adjustExecutionPayloadEnvelopesRequest(any(), anyLong());
   }
@@ -564,6 +798,27 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandlerTest {
     chainBuilder.generateBlocksUpToSlot(latestSlot.plus(chainSize));
 
     return chainBuilder.streamExecutionPayloads(latestSlot.plus(1)).toList();
+  }
+
+  private Map<Bytes32, SignedExecutionPayloadEnvelope> getExecutionPayloadsByBlockRoots(
+      final Set<Bytes32> blockRoots) {
+    final Map<Bytes32, SignedExecutionPayloadEnvelope> result = new HashMap<>();
+    blockRoots.forEach(
+        blockRoot ->
+            chainBuilder
+                .getExecutionPayload(blockRoot)
+                .ifPresent(envelope -> result.put(blockRoot, envelope)));
+    return result;
+  }
+
+  private boolean isStreamClosedError(final Throwable error) {
+    return Throwables.getRootCause(error) instanceof StreamClosedException;
+  }
+
+  private Set<Bytes32> blockRootsAtSlots(final long... slots) {
+    return Arrays.stream(slots)
+        .mapToObj(slot -> chainBuilder.getBlockAtSlot(slot).getRoot())
+        .collect(Collectors.toSet());
   }
 
   private long getLabelledCounterValue(final String label) {

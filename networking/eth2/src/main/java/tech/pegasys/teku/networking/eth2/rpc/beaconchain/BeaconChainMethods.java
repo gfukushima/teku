@@ -13,6 +13,8 @@
 
 package tech.pegasys.teku.networking.eth2.rpc.beaconchain;
 
+import static tech.pegasys.teku.spec.config.Constants.MAXIMUM_CONCURRENT_EXECUTION_PAYLOAD_ENVELOPE_REQUESTS;
+
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -32,6 +34,7 @@ import tech.pegasys.teku.networking.eth2.rpc.beaconchain.methods.DataColumnSidec
 import tech.pegasys.teku.networking.eth2.rpc.beaconchain.methods.DataColumnSidecarsByRootMessageHandler;
 import tech.pegasys.teku.networking.eth2.rpc.beaconchain.methods.ExecutionPayloadEnvelopesByRangeMessageHandler;
 import tech.pegasys.teku.networking.eth2.rpc.beaconchain.methods.ExecutionPayloadEnvelopesByRootMessageHandler;
+import tech.pegasys.teku.networking.eth2.rpc.beaconchain.methods.ExecutionPayloadEnvelopesRequestLimiter;
 import tech.pegasys.teku.networking.eth2.rpc.beaconchain.methods.GoodbyeMessageHandler;
 import tech.pegasys.teku.networking.eth2.rpc.beaconchain.methods.MetadataMessageHandler;
 import tech.pegasys.teku.networking.eth2.rpc.beaconchain.methods.MetadataMessagesFactory;
@@ -171,6 +174,10 @@ public class BeaconChainMethods {
       final RpcEncoding rpcEncoding,
       final DataColumnSidecarArchiveReconstructor dataColumnSidecarArchiveReconstructor,
       final DasReqRespLogger dasLogger) {
+    // Shared by both execution payload envelope methods so the cap covers all such requests
+    final ExecutionPayloadEnvelopesRequestLimiter executionPayloadEnvelopesRequestLimiter =
+        new ExecutionPayloadEnvelopesRequestLimiter(
+            MAXIMUM_CONCURRENT_EXECUTION_PAYLOAD_ENVELOPE_REQUESTS);
     return new BeaconChainMethods(
         createStatus(spec, asyncRunner, statusMessageFactory, peerLookup, rpcEncoding),
         createGoodBye(asyncRunner, metricsSystem, peerLookup, rpcEncoding),
@@ -222,9 +229,21 @@ public class BeaconChainMethods {
             dataColumnSidecarArchiveReconstructor,
             dasLogger),
         createExecutionPayloadEnvelopesByRoot(
-            spec, asyncRunner, peerLookup, rpcEncoding, combinedChainDataClient, metricsSystem),
+            spec,
+            asyncRunner,
+            peerLookup,
+            rpcEncoding,
+            combinedChainDataClient,
+            metricsSystem,
+            executionPayloadEnvelopesRequestLimiter),
         createExecutionPayloadEnvelopesByRange(
-            spec, asyncRunner, peerLookup, rpcEncoding, combinedChainDataClient, metricsSystem),
+            spec,
+            asyncRunner,
+            peerLookup,
+            rpcEncoding,
+            combinedChainDataClient,
+            metricsSystem,
+            executionPayloadEnvelopesRequestLimiter),
         createMetadata(spec, asyncRunner, metadataMessagesFactory, peerLookup, rpcEncoding),
         createPing(asyncRunner, metadataMessagesFactory, peerLookup, rpcEncoding));
   }
@@ -560,7 +579,8 @@ public class BeaconChainMethods {
           final PeerLookup peerLookup,
           final RpcEncoding rpcEncoding,
           final CombinedChainDataClient combinedChainDataClient,
-          final MetricsSystem metricsSystem) {
+          final MetricsSystem metricsSystem,
+          final ExecutionPayloadEnvelopesRequestLimiter requestLimiter) {
 
     if (!spec.isMilestoneSupported(SpecMilestone.GLOAS)) {
       return Optional.empty();
@@ -580,7 +600,7 @@ public class BeaconChainMethods {
     final ExecutionPayloadEnvelopesByRootMessageHandler
         executionPayloadEnvelopesByRootMessageHandler =
             new ExecutionPayloadEnvelopesByRootMessageHandler(
-                spec, combinedChainDataClient, metricsSystem);
+                spec, combinedChainDataClient, metricsSystem, requestLimiter);
 
     return Optional.of(
         new SingleProtocolEth2RpcMethod<>(
@@ -604,7 +624,8 @@ public class BeaconChainMethods {
           final PeerLookup peerLookup,
           final RpcEncoding rpcEncoding,
           final CombinedChainDataClient combinedChainDataClient,
-          final MetricsSystem metricsSystem) {
+          final MetricsSystem metricsSystem,
+          final ExecutionPayloadEnvelopesRequestLimiter requestLimiter) {
 
     if (!spec.isMilestoneSupported(SpecMilestone.GLOAS)) {
       return Optional.empty();
@@ -623,7 +644,11 @@ public class BeaconChainMethods {
     final ExecutionPayloadEnvelopesByRangeMessageHandler
         executionPayloadEnvelopesByRangeMessageHandler =
             new ExecutionPayloadEnvelopesByRangeMessageHandler(
-                spec, getSpecConfigGloas(spec), metricsSystem, combinedChainDataClient);
+                spec,
+                getSpecConfigGloas(spec),
+                metricsSystem,
+                combinedChainDataClient,
+                requestLimiter);
 
     return Optional.of(
         new SingleProtocolEth2RpcMethod<>(

@@ -25,4 +25,11 @@ public interface ResponseCallback<T> {
   void completeWithErrorResponse(RpcException error);
 
   void completeWithUnexpectedError(Throwable error);
+
+  /**
+   * Whether the stream the responses are written to has been closed, by the peer or locally. Once
+   * closed no further response can be delivered, so a handler serving a request slot by slot should
+   * stop doing work for it rather than keep loading data nobody will receive.
+   */
+  boolean isClosed();
 }

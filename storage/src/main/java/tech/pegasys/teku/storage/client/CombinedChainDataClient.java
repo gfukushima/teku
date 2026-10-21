@@ -20,9 +20,13 @@ import static tech.pegasys.teku.infrastructure.async.SafeFuture.completedFuture;
 import com.google.common.annotations.VisibleForTesting;
 import it.unimi.dsi.fastutil.ints.IntList;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.NavigableMap;
 import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Stream;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -654,6 +658,37 @@ public class CombinedChainDataClient {
                 return SafeFuture.completedFuture(maybeExecutionPayload);
               }
               return executionPayloadProvider.getExecutionPayload(blockRoot);
+            });
+  }
+
+  /**
+   * Returns the execution payload envelopes for the given block roots, keyed by block root. Roots
+   * whose envelope is unavailable are absent from the result. Envelopes held in the hot store are
+   * served from it; all remaining roots are resolved with one call to the execution payload
+   * provider, so the blinded envelopes of many finalized blocks are unblinded with a single
+   * execution layer round trip rather than one per root as {@link
+   * #getExecutionPayloadByBlockRoot(Bytes32)} would do.
+   */
+  public SafeFuture<Map<Bytes32, SignedExecutionPayloadEnvelope>> getExecutionPayloadsByBlockRoots(
+      final Set<Bytes32> blockRoots) {
+    final Map<Bytes32, SignedExecutionPayloadEnvelope> result = new HashMap<>();
+    final Set<Bytes32> remainingRoots = new HashSet<>();
+    for (final Bytes32 blockRoot : blockRoots) {
+      recentChainData
+          .getExecutionPayloadIfAvailable(blockRoot)
+          .ifPresentOrElse(
+              executionPayload -> result.put(blockRoot, executionPayload),
+              () -> remainingRoots.add(blockRoot));
+    }
+    if (remainingRoots.isEmpty()) {
+      return SafeFuture.completedFuture(result);
+    }
+    return executionPayloadProvider
+        .getExecutionPayloads(remainingRoots)
+        .thenApply(
+            executionPayloads -> {
+              result.putAll(executionPayloads);
+              return result;
             });
   }
 
