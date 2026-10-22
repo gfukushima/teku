@@ -26,10 +26,6 @@ public interface ResponseCallback<T> {
 
   void completeWithUnexpectedError(Throwable error);
 
-  /**
-   * Whether the stream the responses are written to has been closed, by the peer or locally. Once
-   * closed no further response can be delivered, so a handler serving a request slot by slot should
-   * stop doing work for it rather than keep loading data nobody will receive.
-   */
+  /** Whether the response stream has been closed, so handlers can stop doing work. */
   boolean isClosed();
 }

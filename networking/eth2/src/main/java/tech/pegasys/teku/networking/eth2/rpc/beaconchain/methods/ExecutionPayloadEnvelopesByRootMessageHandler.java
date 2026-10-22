@@ -94,9 +94,7 @@ public class ExecutionPayloadEnvelopesByRootMessageHandler
   }
 
   /**
-   * Serves the next batch of requested roots: the roots are checked against the servable range
-   * first, the envelopes of the whole batch are then retrieved with a single execution layer round
-   * trip and sent in request order. Nothing more is retrieved once the peer has closed the stream.
+   * Filters a batch of roots by servable range, loads their envelopes in one lookup and sends them.
    */
   private SafeFuture<Void> sendNextBatch(final RequestState requestState) {
     if (!requestState.hasMoreBlockRoots()) {
@@ -110,8 +108,6 @@ public class ExecutionPayloadEnvelopesByRootMessageHandler
     return selectRetrievableBlockRoots(blockRoots, minServableEpoch)
         .thenCompose(
             retrievableBlockRoots -> {
-              // Each retrieval costs a database and, for a finalized block, an execution layer
-              // lookup, whether or not an envelope comes out of it
               requestState.charge(retrievableBlockRoots.size());
               return loadExecutionPayloadEnvelopes(
                   retrievableBlockRoots,
@@ -125,11 +121,8 @@ public class ExecutionPayloadEnvelopesByRootMessageHandler
   }
 
   /**
-   * Resolves the slot of each root before retrieving its envelope. Retrieving an envelope for a
-   * finalized block requires reading the blinded envelope from the database and unblinding it with
-   * an execution layer round trip, so a root already known to be outside the servable range is
-   * dropped up front rather than after that work has been done. A root whose slot can't be resolved
-   * still goes through retrieval, where the range is enforced against the envelope itself.
+   * Drops roots known to be outside the servable range before any EL work. Roots with an unknown
+   * slot are kept and checked against the envelope instead.
    */
   private SafeFuture<List<Bytes32>> selectRetrievableBlockRoots(
       final List<Bytes32> blockRoots, final UInt64 minServableEpoch) {
@@ -156,7 +149,6 @@ public class ExecutionPayloadEnvelopesByRootMessageHandler
     return spec.computeEpochAtSlot(slot).isGreaterThanOrEqualTo(minServableEpoch);
   }
 
-  /** The cursor over the requested roots, in request order. */
   static class RequestState extends ExecutionPayloadEnvelopesRequestState {
 
     private final List<Bytes32> blockRoots;
@@ -172,7 +164,6 @@ public class ExecutionPayloadEnvelopesByRootMessageHandler
       this.minServableEpoch = minServableEpoch;
     }
 
-    /** Any of the roots may be that of a finalized block, whose envelope must be unblinded. */
     @Override
     boolean needsUnblinding() {
       return true;
@@ -186,7 +177,6 @@ public class ExecutionPayloadEnvelopesByRootMessageHandler
       return nextBlockRootIndex < blockRoots.size();
     }
 
-    /** Takes up to {@code maxBlockRoots} of the next requested roots, in request order. */
     List<Bytes32> takeNextBlockRoots(final int maxBlockRoots) {
       final int endIndex = Math.min(nextBlockRootIndex + maxBlockRoots, blockRoots.size());
       final List<Bytes32> batch = List.copyOf(blockRoots.subList(nextBlockRootIndex, endIndex));

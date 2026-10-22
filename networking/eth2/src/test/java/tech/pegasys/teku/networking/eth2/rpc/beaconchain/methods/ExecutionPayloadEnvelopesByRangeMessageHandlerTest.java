@@ -254,7 +254,7 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandlerTest {
     // Finalized envelopes are never looked up one root at a time
     verify(combinedChainDataClient, never()).getExecutionPayloadByBlockRoot(any());
     verify(callback).completeSuccessfully();
-    // All 5 requested slots were walked, so the peer is charged for all of them
+    // Charged for all 5 slots walked
     verify(peer, never()).adjustExecutionPayloadEnvelopesRequest(any(), anyLong());
     assertThat(getLabelledCounterValue("ok")).isOne();
   }
@@ -268,8 +268,7 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandlerTest {
         new ExecutionPayloadEnvelopesByRangeRequestMessage(UInt64.ONE, UInt64.valueOf(5));
     handler.onIncomingMessage(PROTOCOL_ID, peer, message, callback);
 
-    // The slots of each batch are resolved to block roots and their envelopes are retrieved with
-    // one call, each batch being sent before the next one is retrieved
+    // One lookup per batch, each batch sent before the next is loaded
     final InOrder inOrder = inOrder(combinedChainDataClient, callback);
     inOrder
         .verify(combinedChainDataClient)
@@ -332,7 +331,7 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandlerTest {
 
     verify(callback, never()).respond(any());
     verify(callback).completeSuccessfully();
-    // Every slot cost a database and an execution layer lookup, so none of them is refunded
+    // Lookups were done for every slot, so nothing is refunded
     verify(peer, never()).adjustExecutionPayloadEnvelopesRequest(any(), anyLong());
   }
 
@@ -408,9 +407,7 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandlerTest {
   @Test
   public void onIncomingMessage_shouldRejectRequestFromHeadChainWhenTooManyAreBeingServed() {
     buildChain(5);
-    // Other peers' requests already fill the limit. Head chain envelopes evicted from the
-    // in-memory store are retained blinded as well, so a head chain request needs unblinding just
-    // the same
+    // Other peers' requests already fill the limit; head chain requests are capped too
     fillRequestLimitWithOtherPeers();
 
     final ExecutionPayloadEnvelopesByRangeRequestMessage message =
@@ -452,9 +449,7 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandlerTest {
         new ExecutionPayloadEnvelopesByRangeRequestMessage(UInt64.ONE, UInt64.valueOf(5));
     handler.onIncomingMessage(PROTOCOL_ID, peer, message, callback);
 
-    // The roots of head chain slots are known from fork choice, so no block is read, and their
-    // envelopes are retrieved with one batched lookup per batch like finalized ones: envelopes
-    // evicted from the in-memory store are retained blinded and need unblinding just the same
+    // Head chain roots come from fork choice (no block reads) and are batched like finalized ones
     final InOrder inOrder = inOrder(combinedChainDataClient, callback);
     inOrder
         .verify(combinedChainDataClient)
@@ -560,7 +555,7 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandlerTest {
       }
     }
     verify(callback).completeSuccessfully();
-    // The skipped slot was still walked, so the peer is charged for all 5 slots
+    // Charged for all 5 slots walked, including the skipped one
     verify(peer, never()).adjustExecutionPayloadEnvelopesRequest(any(), anyLong());
   }
 
@@ -670,7 +665,7 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandlerTest {
     verify(combinedChainDataClient, never())
         .getExecutionPayloadsByBlockRoots(argThat(roots -> roots.contains(emptyRoot)));
     verify(callback).completeSuccessfully();
-    // All 5 requested slots were walked, so the peer is charged for all of them
+    // Charged for all 5 slots walked
     verify(peer, never()).adjustExecutionPayloadEnvelopesRequest(any(), anyLong());
   }
 
@@ -694,7 +689,7 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandlerTest {
       }
     }
     verify(callback).completeSuccessfully();
-    // All 5 requested slots were walked, so the peer is charged for all of them
+    // Charged for all 5 slots walked
     verify(peer, never()).adjustExecutionPayloadEnvelopesRequest(any(), anyLong());
   }
 
@@ -719,7 +714,7 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandlerTest {
       }
     }
     verify(callback).completeSuccessfully();
-    // All 5 requested slots were walked, so the peer is charged for all of them
+    // Charged for all 5 slots walked
     verify(peer, never()).adjustExecutionPayloadEnvelopesRequest(any(), anyLong());
   }
 
@@ -757,7 +752,7 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandlerTest {
       }
     }
     verify(callback).completeSuccessfully();
-    // All 5 requested slots were walked, so the peer is charged for all of them
+    // Charged for all 5 slots walked
     verify(peer, never()).adjustExecutionPayloadEnvelopesRequest(any(), anyLong());
   }
 
@@ -784,9 +779,7 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandlerTest {
         verify(combinedChainDataClient, never()).getBlockAtSlotExact(envelope.getSlot());
       }
     }
-    // Slots are retrieved in batches in slot order whichever side of the finalized block they are
-    // on: only resolving the root differs, from the database below it and from the head chain
-    // nodes from it onwards
+    // Batched in slot order on both sides of the finalized block
     final InOrder inOrder = inOrder(combinedChainDataClient, callback);
     inOrder
         .verify(combinedChainDataClient)

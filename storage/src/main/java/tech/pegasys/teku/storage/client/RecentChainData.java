@@ -736,7 +736,7 @@ public abstract class RecentChainData
     return getExecutionPayloadIfAvailable(blockRoot).isPresent();
   }
 
-  /** Returns the execution payload envelope held in the hot store, without any fallback lookup. */
+  /** Hot store only, no fallback. */
   public Optional<SignedExecutionPayloadEnvelope> getExecutionPayloadIfAvailable(
       final Bytes32 blockRoot) {
     return Optional.ofNullable(store).flatMap(s -> s.getExecutionPayloadIfAvailable(blockRoot));

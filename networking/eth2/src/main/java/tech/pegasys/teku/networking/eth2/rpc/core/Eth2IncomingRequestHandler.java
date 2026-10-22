@@ -97,7 +97,6 @@ public class Eth2IncomingRequestHandler<
 
   @Override
   public void closed(final NodeId nodeId, final RpcStream rpcStream) {
-    // Let a response still being produced find out that nobody will receive it any more
     streamClosed.set(true);
     requestDecoder.close();
   }

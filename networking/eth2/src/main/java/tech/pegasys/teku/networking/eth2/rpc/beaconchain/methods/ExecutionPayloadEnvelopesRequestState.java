@@ -18,11 +18,7 @@ import tech.pegasys.teku.infrastructure.async.SafeFuture;
 import tech.pegasys.teku.networking.eth2.rpc.core.ResponseCallback;
 import tech.pegasys.teku.spec.datastructures.epbs.versions.gloas.SignedExecutionPayloadEnvelope;
 
-/**
- * The state of an execution payload envelopes request being served, shared by the by-range and
- * by-root handlers: the stream the envelopes are sent on and the amount of work the peer is charged
- * for. Subclasses add the cursor over what the request asked for, slots or block roots.
- */
+/** State of an envelopes request being served: response stream and work charged to the peer. */
 abstract class ExecutionPayloadEnvelopesRequestState {
 
   private final ResponseCallback<SignedExecutionPayloadEnvelope> callback;
@@ -35,28 +31,18 @@ abstract class ExecutionPayloadEnvelopesRequestState {
     this.requestedCount = requestedCount;
   }
 
-  /**
-   * Whether serving the request may need envelopes of finalized blocks, which are only retained
-   * blinded and are unblinded through the execution layer.
-   */
+  /** Whether serving the request may need envelopes unblinded via the EL. */
   abstract boolean needsUnblinding();
 
-  /** Whether the peer has closed the stream, so that nothing sent would be received any more. */
   boolean isStreamClosed() {
     return callback.isClosed();
   }
 
-  /** The number of envelopes the request asked for, charged to the peer up front. */
   long getRequestedCount() {
     return requestedCount;
   }
 
-  /**
-   * Charges the peer for work done on its behalf, whether or not an envelope came out of it: every
-   * slot walked or root retrieved cost a lookup and, for a finalized block, an execution layer
-   * round trip. The peer's rate limit is adjusted to the charged count once the request has been
-   * served, so only what was never charged is refunded.
-   */
+  /** Charges for lookups done, whether or not they produced an envelope. */
   void charge(final long count) {
     chargedCount += count;
   }
@@ -70,7 +56,6 @@ abstract class ExecutionPayloadEnvelopesRequestState {
     return callback.respond(executionPayloadEnvelope);
   }
 
-  /** Sends the envelopes one after the other, in the given order. */
   SafeFuture<Void> sendExecutionPayloadEnvelopes(
       final List<SignedExecutionPayloadEnvelope> executionPayloadEnvelopes) {
     SafeFuture<Void> sent = SafeFuture.COMPLETE;

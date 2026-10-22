@@ -18,14 +18,8 @@ import java.util.Map;
 import tech.pegasys.teku.networking.p2p.peer.NodeId;
 
 /**
- * Caps how many execution payload envelope requests may be served at the same time, in total and
- * per peer. Envelopes not held in memory are only retained blinded and are unblinded with an {@code
- * engine_getPayloadBodiesByHash} round trip, so without a cap peers could pile up unbounded engine
- * work by opening many requests at once, and without a per-peer share one peer could hold every
- * slot of the cap by reading its responses slowly. Requests over either limit are rejected rather
- * than queued: the peer is told the resource is unavailable and can retry later or elsewhere.
- *
- * <p>Shared by the by-range and by-root handlers so that the caps cover both request types.
+ * Caps concurrent execution payload envelope requests, in total and per peer, since serving them
+ * may require EL calls. Excess requests are rejected rather than queued.
  */
 public class ExecutionPayloadEnvelopesRequestLimiter {
 
@@ -40,13 +34,7 @@ public class ExecutionPayloadEnvelopesRequestLimiter {
     this.maxConcurrentRequestsPerPeer = maxConcurrentRequestsPerPeer;
   }
 
-  /**
-   * Admits a request from the peer if neither the total nor the peer's share of the cap has been
-   * reached. Every successful acquisition must be followed by exactly one {@link #release(NodeId)}
-   * for the same peer once the request has been served or has failed.
-   *
-   * @return true if the request was admitted
-   */
+  /** Each successful acquisition must be followed by exactly one {@link #release(NodeId)}. */
   public synchronized boolean tryAcquire(final NodeId peerId) {
     final int peerActiveRequests = activeRequestsByPeer.getOrDefault(peerId, 0);
     if (activeRequests >= maxConcurrentRequests
@@ -59,7 +47,7 @@ public class ExecutionPayloadEnvelopesRequestLimiter {
   }
 
   public synchronized void release(final NodeId peerId) {
-    // A release without a matching acquisition must never raise either cap
+    // Ignore unmatched releases
     final int peerActiveRequests = activeRequestsByPeer.getOrDefault(peerId, 0);
     if (peerActiveRequests == 0) {
       return;

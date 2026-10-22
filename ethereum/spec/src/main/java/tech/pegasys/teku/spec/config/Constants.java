@@ -59,13 +59,11 @@ public class Constants {
       Duration.ofSeconds(60); // syncing or wrong chainid
   public static final int MAXIMUM_CONCURRENT_ETH1_REQUESTS = 5;
   public static final int MAXIMUM_CONCURRENT_EE_REQUESTS = 5;
-  // engine_getPayloadBodiesByHash only unblinds historical payload envelopes requested by peers, so
-  // it is served from its own small queue with a bounded backlog rather than the queue above
+  // Separate queue for peer-driven engine_getPayloadBodiesByHash calls
   public static final int MAXIMUM_CONCURRENT_EE_PAYLOAD_BODIES_REQUESTS = 2;
   public static final int MAXIMUM_QUEUED_EE_PAYLOAD_BODIES_REQUESTS = 128;
   public static final int MAXIMUM_CONCURRENT_NON_CRITICAL_EB_REQUESTS = 3;
-  // Execution payload envelope requests from peers, whose envelopes may need unblinding through
-  // the EL, served at the same time in total and per peer
+  // Concurrent execution payload envelope requests served, in total and per peer
   public static final int MAXIMUM_CONCURRENT_EXECUTION_PAYLOAD_ENVELOPE_REQUESTS = 16;
   public static final int MAXIMUM_CONCURRENT_EXECUTION_PAYLOAD_ENVELOPE_REQUESTS_PER_PEER = 2;
   public static final int REPUTATION_MANAGER_CAPACITY = 1024;

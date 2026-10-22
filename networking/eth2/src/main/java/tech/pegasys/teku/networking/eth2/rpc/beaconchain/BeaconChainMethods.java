@@ -216,7 +216,7 @@ public class BeaconChainMethods {
       final DataColumnSidecarArchiveReconstructor dataColumnSidecarArchiveReconstructor,
       final DasReqRespLogger dasLogger,
       final Optional<LightClientUpdateStore> lightClientUpdateStore) {
-    // Shared by both execution payload envelope methods so the cap covers all such requests
+    // Shared by both envelope methods
     final ExecutionPayloadEnvelopesRequestLimiter executionPayloadEnvelopesRequestLimiter =
         new ExecutionPayloadEnvelopesRequestLimiter(
             MAXIMUM_CONCURRENT_EXECUTION_PAYLOAD_ENVELOPE_REQUESTS,

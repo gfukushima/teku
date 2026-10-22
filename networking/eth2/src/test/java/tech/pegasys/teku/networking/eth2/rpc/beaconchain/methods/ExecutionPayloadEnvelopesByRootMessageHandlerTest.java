@@ -193,8 +193,7 @@ class ExecutionPayloadEnvelopesByRootMessageHandlerTest {
         createRequestFromBeaconBlockRoots(roots);
     handler.onIncomingMessage(V2_PROTOCOL_ID, peer, message, callback);
 
-    // The envelopes of each batch of roots are retrieved with one call, each batch being sent
-    // before the next one is retrieved
+    // One lookup per batch, each batch sent before the next is loaded
     final InOrder inOrder = inOrder(combinedChainDataClient, callback);
     inOrder
         .verify(combinedChainDataClient)
@@ -227,7 +226,7 @@ class ExecutionPayloadEnvelopesByRootMessageHandlerTest {
 
     verify(callback, never()).respond(any());
     verify(callback).completeSuccessfully();
-    // Every root cost a database and an execution layer lookup, so none of them is refunded
+    // Lookups were done for every root, so nothing is refunded
     verify(peer, never()).adjustExecutionPayloadEnvelopesRequest(any(), anyLong());
   }
 
@@ -345,8 +344,7 @@ class ExecutionPayloadEnvelopesByRootMessageHandlerTest {
 
     // Requesting 5 execution payload envelopes
     verify(peer).approveExecutionPayloadEnvelopesRequest(any(), eq(5L));
-    // All 5 roots were retrieved even though only 4 envelopes were found, so the peer is charged
-    // for all of them
+    // Charged for all 5 roots looked up, though only 4 envelopes were found
     verify(peer, never()).adjustExecutionPayloadEnvelopesRequest(any(), anyLong());
 
     verify(callback, times(4)).respond(any());
@@ -411,7 +409,7 @@ class ExecutionPayloadEnvelopesByRootMessageHandlerTest {
     verify(callback).respond(mockedNewEnvelope);
     verify(callback, never()).respond(mockedOldEnvelope);
     verify(callback).completeSuccessfully();
-    // The slot of neither root was known up front, so both were retrieved and are charged for
+    // Both roots had unknown slots, so both were looked up and charged
     verify(peer, never()).adjustExecutionPayloadEnvelopesRequest(any(), anyLong());
   }
 
@@ -527,9 +525,7 @@ class ExecutionPayloadEnvelopesByRootMessageHandlerTest {
     return result;
   }
 
-  /**
-   * Stubs the batched lookup to return the given envelopes for whichever of their roots is asked
-   */
+  /** Stubs the batched lookup with the given envelopes. */
   private void stubExecutionPayloadsByBlockRoots(
       final Map<Bytes32, SignedExecutionPayloadEnvelope> envelopesByRoot) {
     doAnswer(

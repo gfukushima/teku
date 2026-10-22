@@ -41,20 +41,8 @@ import tech.pegasys.teku.spec.datastructures.epbs.versions.gloas.SignedExecution
 import tech.pegasys.teku.storage.client.CombinedChainDataClient;
 
 /**
- * Serves execution payload envelope requests. Envelopes of blocks on the head chain come from the
- * hot store, but those of finalized blocks are only retained blinded and are unblinded through the
- * execution layer, so serving them is guarded against peers monopolising the execution engine:
- *
- * <ul>
- *   <li>envelopes are unblinded in batches, each batch costing a single execution layer round trip,
- *   <li>only a bounded number of requests needing unblinding is served at a time, further ones
- *       being rejected as unavailable,
- *   <li>the peer is charged for the work done rather than for the envelopes sent,
- *   <li>nothing more is retrieved once the peer has closed the stream.
- * </ul>
- *
- * <p>Subclasses work out what a request asks for and serve it, batch by batch, charging the request
- * state as they go.
+ * Base handler for execution payload envelope requests. Envelopes may need unblinding via the EL,
+ * so requests are capped, charged for work done, served in batches and stopped on stream closure.
  */
 public abstract class AbstractExecutionPayloadEnvelopesMessageHandler<
         TRequest, TRequestState extends ExecutionPayloadEnvelopesRequestState>
@@ -62,7 +50,7 @@ public abstract class AbstractExecutionPayloadEnvelopesMessageHandler<
 
   private static final Logger LOG = LogManager.getLogger();
 
-  /** Number of blocks whose envelopes are unblinded with a single execution layer round trip. */
+  /** Max envelopes unblinded per EL call. */
   static final int DEFAULT_UNBLINDING_BATCH_SIZE = 32;
 
   protected final Spec spec;
@@ -74,7 +62,7 @@ public abstract class AbstractExecutionPayloadEnvelopesMessageHandler<
   private final String requestType;
 
   /**
-   * @param methodName the request method as used in metric names, e.g. {@code by_range}
+   * @param methodName used in metric names, e.g. {@code by_range}
    */
   protected AbstractExecutionPayloadEnvelopesMessageHandler(
       final Spec spec,
@@ -129,10 +117,7 @@ public abstract class AbstractExecutionPayloadEnvelopesMessageHandler<
 
     final TRequestState requestState = createRequestState(message, callback);
 
-    // Envelopes not held in memory are unblinded through the execution layer, so only a bounded
-    // number of requests needing that is served at a time, in total and per peer. Requests that
-    // don't need it are cheap and are never held back by that cap. A rejected request still
-    // counts against the peer's rate limits.
+    // Cap concurrent requests that may hit the EL. Rejected requests are not refunded.
     final boolean needsUnblinding = requestState.needsUnblinding();
     if (needsUnblinding && !requestLimiter.tryAcquire(peer.getId())) {
       requestCounter.labels("concurrency_limited").inc();
@@ -151,8 +136,7 @@ public abstract class AbstractExecutionPayloadEnvelopesMessageHandler<
 
     response.finish(
         () -> {
-          // The peer was charged for the requested count up front and is only refunded what was
-          // never charged, that is the work never done rather than the envelopes never sent.
+          // Refund only the work never done, not envelopes never sent
           if (requestState.getChargedCount() != requestedCount) {
             peer.adjustExecutionPayloadEnvelopesRequest(
                 maybeRequestKey.get(), requestState.getChargedCount());
@@ -162,28 +146,14 @@ public abstract class AbstractExecutionPayloadEnvelopesMessageHandler<
         err -> handleError(err, callback, requestType));
   }
 
-  /** The number of envelopes the request asks for, which the peer's rate limit is charged for. */
   protected abstract long getRequestedCount(TRequest message);
 
-  /**
-   * Works out what the request asks for, before anything is retrieved. The state's {@link
-   * ExecutionPayloadEnvelopesRequestState#needsUnblinding()} decides whether the request is subject
-   * to the concurrency cap.
-   */
   protected abstract TRequestState createRequestState(
       TRequest message, ResponseCallback<SignedExecutionPayloadEnvelope> callback);
 
-  /**
-   * Serves the request, sending its envelopes and charging the state for the work done. Fails with
-   * a {@link tech.pegasys.teku.networking.p2p.rpc.StreamClosedException} when the peer closes the
-   * stream before the request is complete.
-   */
+  /** Sends the envelopes and charges the state; fails if the stream is closed mid-request. */
   protected abstract SafeFuture<Void> serve(TRequestState requestState);
 
-  /**
-   * The earliest epoch we are required to serve envelopes for: the earliest epoch within {@code
-   * MIN_EPOCHS_FOR_BLOCK_REQUESTS} of the current epoch, never earlier than the Gloas fork.
-   */
   protected UInt64 getMinServableEpoch() {
     final UInt64 currentEpoch =
         combinedChainDataClient.getRecentChainData().getCurrentEpoch().orElse(ZERO);
@@ -192,13 +162,7 @@ public abstract class AbstractExecutionPayloadEnvelopesMessageHandler<
         .max(spec.getSpecConfig(currentEpoch).getGloasForkEpoch());
   }
 
-  /**
-   * Retrieves the envelopes of a batch of blocks with a single lookup and returns them in the order
-   * of the batch, leaving out the envelopes their batch item does not accept.
-   *
-   * @param blockRootOf the block root an item of the batch asks the envelope of
-   * @param accepts whether the envelope retrieved for an item is the one it asked for
-   */
+  /** Loads a batch of envelopes in one lookup, keeping batch order and dropping rejected ones. */
   protected <T> SafeFuture<List<SignedExecutionPayloadEnvelope>> loadExecutionPayloadEnvelopes(
       final List<T> batch,
       final Function<T, Bytes32> blockRootOf,

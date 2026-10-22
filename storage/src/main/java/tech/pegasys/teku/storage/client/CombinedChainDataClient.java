@@ -679,14 +679,7 @@ public class CombinedChainDataClient {
             });
   }
 
-  /**
-   * Returns the execution payload envelopes for the given block roots, keyed by block root. Roots
-   * whose envelope is unavailable are absent from the result. Envelopes held in the hot store are
-   * served from it; all remaining roots are resolved with one call to the execution payload
-   * provider, so the blinded envelopes of many finalized blocks are unblinded with a single
-   * execution layer round trip rather than one per root as {@link
-   * #getExecutionPayloadByBlockRoot(Bytes32)} would do.
-   */
+  /** Batch lookup: hot store first, the rest unblinded with a single EL call. */
   public SafeFuture<Map<Bytes32, SignedExecutionPayloadEnvelope>> getExecutionPayloadsByBlockRoots(
       final Set<Bytes32> blockRoots) {
     final Map<Bytes32, SignedExecutionPayloadEnvelope> result = new HashMap<>();

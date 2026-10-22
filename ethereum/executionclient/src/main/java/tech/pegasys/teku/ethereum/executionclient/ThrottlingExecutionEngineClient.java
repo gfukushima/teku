@@ -53,14 +53,6 @@ public class ThrottlingExecutionEngineClient implements ExecutionEngineClient {
   private final ThrottlingTaskQueue taskQueue;
   private final ThrottlingTaskQueue payloadBodiesTaskQueue;
 
-  /**
-   * @param maximumConcurrentRequests concurrency limit of the queue serving the engine calls that
-   *     block import, fork choice and block production wait on
-   * @param maximumConcurrentPayloadBodiesRequests concurrency limit of the separate queue serving
-   *     {@code engine_getPayloadBodiesByHash}
-   * @param maximumQueuedPayloadBodiesRequests how many {@code engine_getPayloadBodiesByHash} calls
-   *     may wait for a slot in that queue before further calls are rejected
-   */
   public ThrottlingExecutionEngineClient(
       final ExecutionEngineClient delegate,
       final int maximumConcurrentRequests,
@@ -226,13 +218,7 @@ public class ThrottlingExecutionEngineClient implements ExecutionEngineClient {
     return taskQueue.queueTask(() -> delegate.getBlobsV2(blobVersionedHashes));
   }
 
-  /**
-   * Payload bodies are only looked up to unblind historical execution payload envelopes requested
-   * by peers or REST API clients, so these calls are driven by remote input. They go through a
-   * small queue of their own: a burst of them must never sit in front of the newPayload and
-   * forkchoiceUpdated calls that block import and fork choice wait on, and the bounded backlog
-   * rejects further lookups instead of growing without limit.
-   */
+  /** Peer-driven, so served from a separate bounded queue to never delay critical engine calls. */
   @Override
   public SafeFuture<Response<List<ExecutionPayloadBodyV2>>> getPayloadBodiesByHashV2(
       final List<Bytes32> blockHashes) {

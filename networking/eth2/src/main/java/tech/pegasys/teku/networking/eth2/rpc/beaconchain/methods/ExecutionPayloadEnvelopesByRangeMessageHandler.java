@@ -160,13 +160,7 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandler
     return sendNextBatch(requestState);
   }
 
-  /**
-   * Serves the next batch of slots. Each slot is resolved to the root of the block whose envelope
-   * may be served, then the envelopes of the whole batch are retrieved with a single lookup, which
-   * costs at most one execution layer round trip for the envelopes not held in memory, and sent in
-   * slot order. Each batch is sent before the next one is retrieved and nothing more is retrieved
-   * once the peer has closed the stream.
-   */
+  /** Resolves a batch of slots to roots, loads their envelopes in one lookup and sends them. */
   private SafeFuture<Void> sendNextBatch(final RequestState requestState) {
     if (!requestState.hasMoreSlotsToWalk()) {
       return SafeFuture.COMPLETE;
@@ -187,10 +181,6 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandler
         .thenCompose(__ -> sendNextBatch(requestState));
   }
 
-  /**
-   * Resolves each slot to the root of the block whose envelope may be served, in slot order,
-   * skipping the slots that have none.
-   */
   private SafeFuture<List<SlotAndBlockRoot>> resolveBlockRoots(
       final List<UInt64> slots, final RequestState requestState) {
     SafeFuture<List<SlotAndBlockRoot>> blockRoots = completedFuture(new ArrayList<>());
@@ -212,16 +202,11 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandler
   private SafeFuture<Optional<Bytes32>> resolveBlockRoot(
       final UInt64 slot, final RequestState requestState) {
     if (requestState.isFinalizedSlot(slot)) {
-      // The canonical block at the slot is read from the finalized database, which only retains
-      // the envelopes of payloads the finalized chain built on
       return combinedChainDataClient
           .getBlockAtSlotExact(slot)
           .thenApply(maybeBlock -> maybeBlock.map(SignedBeaconBlock::getRoot));
     }
-    // A slot on the head chain is known from fork choice, with no block to read: an unknown slot is
-    // empty, and a payload the chain did not build on must not be served even if we hold its
-    // envelope, be it because the next block built on the EMPTY variant or because the head itself
-    // is EMPTY or PENDING as fork choice has not selected its payload
+    // Hot slots: only serve payloads the head chain built on (FULL nodes)
     return completedFuture(
         requestState
             .getKnownNode(slot)
@@ -229,7 +214,6 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandler
             .map(ForkChoiceNode::blockRoot));
   }
 
-  /** The cursor over the requested slots, from the start of the range up to our head. */
   static class RequestState extends ExecutionPayloadEnvelopesRequestState {
 
     private final UInt64 headSlot;
@@ -251,10 +235,7 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandler
       this.knownNodes = knownNodes;
     }
 
-    /**
-     * Any slot may need its envelope unblinded: envelopes of finalized blocks are only retained
-     * blinded, and so are those of head chain blocks once evicted from the in-memory store.
-     */
+    /** Hot envelopes evicted from memory are stored blinded too, so any slot may need the EL. */
     @Override
     boolean needsUnblinding() {
       return hasMoreSlotsToWalk();
@@ -264,23 +245,15 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandler
       return Optional.ofNullable(knownNodes.get(slot));
     }
 
-    /** Whether the walk has further slots to serve, up to the requested count and our head. */
     boolean hasMoreSlotsToWalk() {
       return !remainingSlots.isZero() && currentSlot.isLessThanOrEqualTo(headSlot);
     }
 
-    /**
-     * Slots below the first node of the head chain are served from the finalized database. When no
-     * node of the range is in fork choice every slot up to the head is.
-     */
+    /** Slots below the first head chain node are read from the finalized database. */
     boolean isFinalizedSlot(final UInt64 slot) {
       return knownNodes.isEmpty() || slot.isLessThan(knownNodes.firstKey());
     }
 
-    /**
-     * Takes up to {@code maxSlots} of the next slots of the walk, charging the peer for each of
-     * them whether or not it turns out to have an envelope.
-     */
     List<UInt64> takeNextSlots(final int maxSlots) {
       final List<UInt64> slots = new ArrayList<>();
       while (slots.size() < maxSlots && hasMoreSlotsToWalk()) {
