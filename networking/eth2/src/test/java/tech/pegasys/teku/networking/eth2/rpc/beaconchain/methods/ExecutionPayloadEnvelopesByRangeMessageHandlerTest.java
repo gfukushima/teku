@@ -58,6 +58,8 @@ import tech.pegasys.teku.networking.eth2.rpc.beaconchain.BeaconChainMethodIds;
 import tech.pegasys.teku.networking.eth2.rpc.core.ResponseCallback;
 import tech.pegasys.teku.networking.eth2.rpc.core.RpcException;
 import tech.pegasys.teku.networking.eth2.rpc.core.encodings.RpcEncoding;
+import tech.pegasys.teku.networking.p2p.mock.MockNodeId;
+import tech.pegasys.teku.networking.p2p.peer.NodeId;
 import tech.pegasys.teku.networking.p2p.rpc.StreamClosedException;
 import tech.pegasys.teku.spec.Spec;
 import tech.pegasys.teku.spec.TestSpecFactory;
@@ -85,9 +87,10 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandlerTest {
   private final CombinedChainDataClient combinedChainDataClient =
       mock(CombinedChainDataClient.class);
   private final RecentChainData recentChainData = mock(RecentChainData.class);
-  // A single request may be served at a time
+  private static final NodeId PEER_ID = new MockNodeId(1);
+  // Two requests may be served at a time, one per peer
   private final ExecutionPayloadEnvelopesRequestLimiter requestLimiter =
-      new ExecutionPayloadEnvelopesRequestLimiter(1);
+      new ExecutionPayloadEnvelopesRequestLimiter(2, 1);
   private final ExecutionPayloadEnvelopesByRangeMessageHandler handler =
       new ExecutionPayloadEnvelopesByRangeMessageHandler(
           spec,
@@ -109,6 +112,7 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandlerTest {
     when(combinedChainDataClient.getRecentChainData()).thenReturn(recentChainData);
     // Current epoch 0 keeps the whole chain within the servable range by default
     when(recentChainData.getCurrentEpoch()).thenReturn(Optional.of(ZERO));
+    when(peer.getId()).thenReturn(PEER_ID);
     when(peer.approveRequest()).thenReturn(true);
     when(peer.approveExecutionPayloadEnvelopesRequest(any(), anyLong()))
         .thenReturn(Optional.of(new RequestKey(ZERO, 42)));
@@ -117,10 +121,7 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandlerTest {
     // Forward head chain node requests from the mock to the ChainBuilder: every block on the
     // chain has its payload built on by the next block, so all nodes are FULL
     stubHeadChainNodes(__ -> PAYLOAD_STATUS_FULL);
-    // Forward execution payload envelope block root requests from the mock to the ChainBuilder
-    when(combinedChainDataClient.getExecutionPayloadByBlockRoot(any()))
-        .thenAnswer(
-            i -> SafeFuture.completedFuture(chainBuilder.getExecutionPayload(i.getArgument(0))));
+    // Forward batched execution payload envelope lookups from the mock to the ChainBuilder
     when(combinedChainDataClient.getExecutionPayloadsByBlockRoots(any()))
         .thenAnswer(
             i -> SafeFuture.completedFuture(getExecutionPayloadsByBlockRoots(i.getArgument(0))));
@@ -361,8 +362,8 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandlerTest {
   @Test
   public void onIncomingMessage_shouldStopWalkingHeadChainWhenStreamIsClosed() {
     final List<SignedExecutionPayloadEnvelope> envelopes = buildChain(5);
-    // The peer resets the stream after two envelopes have been sent
-    when(callback.isClosed()).thenReturn(false, false, true);
+    // The peer resets the stream after the first batch has been sent
+    when(callback.isClosed()).thenReturn(false, true);
 
     final ExecutionPayloadEnvelopesByRangeRequestMessage message =
         new ExecutionPayloadEnvelopesByRangeRequestMessage(UInt64.ONE, UInt64.valueOf(5));
@@ -371,8 +372,10 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandlerTest {
     verify(callback, times(2)).respond(any());
     verify(callback).respond(envelopes.get(0));
     verify(callback).respond(envelopes.get(1));
+    // No further envelope is retrieved once the stream is closed
+    final Bytes32 slot3Root = chainBuilder.getBlockAtSlot(3).getRoot();
     verify(combinedChainDataClient, never())
-        .getExecutionPayloadByBlockRoot(chainBuilder.getBlockAtSlot(3).getRoot());
+        .getExecutionPayloadsByBlockRoots(argThat(roots -> roots.contains(slot3Root)));
     verify(callback, never()).completeSuccessfully();
     verify(callback).completeWithUnexpectedError(argThat(this::isStreamClosedError));
     verify(peer, never()).adjustExecutionPayloadEnvelopesRequest(any(), anyLong());
@@ -382,8 +385,8 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandlerTest {
   public void onIncomingMessage_shouldRejectRequestNeedingUnblindingWhenTooManyAreBeingServed() {
     buildChain(6);
     stubFinalizedChainHeadAndBlockLookup(UInt64.valueOf(6));
-    // Another request is already being served
-    assertThat(requestLimiter.tryAcquire()).isTrue();
+    // Other peers' requests already fill the limit
+    fillRequestLimitWithOtherPeers();
 
     final ExecutionPayloadEnvelopesByRangeRequestMessage message =
         new ExecutionPayloadEnvelopesByRangeRequestMessage(UInt64.ONE, UInt64.valueOf(5));
@@ -403,21 +406,74 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandlerTest {
   }
 
   @Test
-  public void onIncomingMessage_shouldServeRequestFromHeadChainWhenTooManyAreBeingServed() {
-    final List<SignedExecutionPayloadEnvelope> envelopes = buildChain(5);
-    // Another request is already being served, but this one needs no unblinding
-    assertThat(requestLimiter.tryAcquire()).isTrue();
+  public void onIncomingMessage_shouldRejectRequestFromHeadChainWhenTooManyAreBeingServed() {
+    buildChain(5);
+    // Other peers' requests already fill the limit. Head chain envelopes evicted from the
+    // in-memory store are retained blinded as well, so a head chain request needs unblinding just
+    // the same
+    fillRequestLimitWithOtherPeers();
 
     final ExecutionPayloadEnvelopesByRangeRequestMessage message =
         new ExecutionPayloadEnvelopesByRangeRequestMessage(UInt64.ONE, UInt64.valueOf(5));
     handler.onIncomingMessage(PROTOCOL_ID, peer, message, callback);
 
-    verify(callback, times(5)).respond(any());
-    for (final SignedExecutionPayloadEnvelope envelope : envelopes) {
-      verify(callback).respond(envelope);
-    }
+    verify(callback)
+        .completeWithErrorResponse(any(RpcException.ResourceUnavailableException.class));
+    verify(callback, never()).respond(any());
+    verify(callback, never()).completeSuccessfully();
+    verify(combinedChainDataClient, never()).getExecutionPayloadsByBlockRoots(any());
+    verify(peer, never()).adjustExecutionPayloadEnvelopesRequest(any(), anyLong());
+    assertThat(getLabelledCounterValue("concurrency_limited")).isOne();
+    assertThat(getLabelledCounterValue("ok")).isZero();
+  }
+
+  @Test
+  public void onIncomingMessage_shouldNotTakeConcurrencySlotWhenThereIsNothingToWalk() {
+    buildChain(5);
+    stubChainHead(UInt64.valueOf(5));
+    // Other peers' requests already fill the limit, but this one asks for slots beyond our head
+    fillRequestLimitWithOtherPeers();
+
+    final ExecutionPayloadEnvelopesByRangeRequestMessage message =
+        new ExecutionPayloadEnvelopesByRangeRequestMessage(UInt64.valueOf(10), UInt64.valueOf(2));
+    handler.onIncomingMessage(PROTOCOL_ID, peer, message, callback);
+
+    verify(callback, never()).respond(any());
     verify(callback).completeSuccessfully();
+    verify(peer).adjustExecutionPayloadEnvelopesRequest(any(), eq(0L));
     assertThat(getLabelledCounterValue("concurrency_limited")).isZero();
+  }
+
+  @Test
+  public void onIncomingMessage_shouldRetrieveHeadChainEnvelopesInBatchesInSlotOrder() {
+    final List<SignedExecutionPayloadEnvelope> envelopes = buildChain(5);
+
+    final ExecutionPayloadEnvelopesByRangeRequestMessage message =
+        new ExecutionPayloadEnvelopesByRangeRequestMessage(UInt64.ONE, UInt64.valueOf(5));
+    handler.onIncomingMessage(PROTOCOL_ID, peer, message, callback);
+
+    // The roots of head chain slots are known from fork choice, so no block is read, and their
+    // envelopes are retrieved with one batched lookup per batch like finalized ones: envelopes
+    // evicted from the in-memory store are retained blinded and need unblinding just the same
+    final InOrder inOrder = inOrder(combinedChainDataClient, callback);
+    inOrder
+        .verify(combinedChainDataClient)
+        .getExecutionPayloadsByBlockRoots(blockRootsAtSlots(1, 2));
+    inOrder.verify(callback).respond(envelopes.get(0));
+    inOrder.verify(callback).respond(envelopes.get(1));
+    inOrder
+        .verify(combinedChainDataClient)
+        .getExecutionPayloadsByBlockRoots(blockRootsAtSlots(3, 4));
+    inOrder.verify(callback).respond(envelopes.get(2));
+    inOrder.verify(callback).respond(envelopes.get(3));
+    inOrder.verify(combinedChainDataClient).getExecutionPayloadsByBlockRoots(blockRootsAtSlots(5));
+    inOrder.verify(callback).respond(envelopes.get(4));
+    inOrder.verify(callback).completeSuccessfully();
+    verify(combinedChainDataClient, times(3)).getExecutionPayloadsByBlockRoots(any());
+    verify(combinedChainDataClient, never()).getExecutionPayloadByBlockRoot(any());
+    verify(combinedChainDataClient, never()).getBlockAtSlotExact(any());
+    // The request held a concurrency slot while being served and released it
+    assertThat(requestLimiter.tryAcquire(PEER_ID)).isTrue();
   }
 
   @Test
@@ -430,7 +486,7 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandlerTest {
     handler.onIncomingMessage(PROTOCOL_ID, peer, message, callback);
 
     verify(callback).completeSuccessfully();
-    assertThat(requestLimiter.tryAcquire()).isTrue();
+    assertThat(requestLimiter.tryAcquire(PEER_ID)).isTrue();
   }
 
   @Test
@@ -446,7 +502,28 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandlerTest {
     handler.onIncomingMessage(PROTOCOL_ID, peer, message, callback);
 
     verify(callback).completeWithUnexpectedError(any());
-    assertThat(requestLimiter.tryAcquire()).isTrue();
+    assertThat(requestLimiter.tryAcquire(PEER_ID)).isTrue();
+  }
+
+  @Test
+  public void onIncomingMessage_shouldRejectRequestWhenPeerAlreadyHasItsShareOfRequests() {
+    buildChain(5);
+    // The limit has room, but this peer already has a request being served
+    assertThat(requestLimiter.tryAcquire(PEER_ID)).isTrue();
+
+    final ExecutionPayloadEnvelopesByRangeRequestMessage message =
+        new ExecutionPayloadEnvelopesByRangeRequestMessage(UInt64.ONE, UInt64.valueOf(5));
+    handler.onIncomingMessage(PROTOCOL_ID, peer, message, callback);
+
+    verify(callback)
+        .completeWithErrorResponse(any(RpcException.ResourceUnavailableException.class));
+    verify(callback, never()).respond(any());
+    verify(callback, never()).completeSuccessfully();
+    verify(combinedChainDataClient, never()).getExecutionPayloadsByBlockRoots(any());
+    verify(peer, never()).adjustExecutionPayloadEnvelopesRequest(any(), anyLong());
+    assertThat(getLabelledCounterValue("concurrency_limited")).isOne();
+    // Another peer is still admitted
+    assertThat(requestLimiter.tryAcquire(new MockNodeId(2))).isTrue();
   }
 
   @Test
@@ -589,8 +666,9 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandlerTest {
       }
     }
     // The envelope of the EMPTY node is never even looked up
+    final Bytes32 emptyRoot = chainBuilder.getBlockAtSlot(emptySlot).getRoot();
     verify(combinedChainDataClient, never())
-        .getExecutionPayloadByBlockRoot(chainBuilder.getBlockAtSlot(emptySlot).getRoot());
+        .getExecutionPayloadsByBlockRoots(argThat(roots -> roots.contains(emptyRoot)));
     verify(callback).completeSuccessfully();
     // All 5 requested slots were walked, so the peer is charged for all of them
     verify(peer, never()).adjustExecutionPayloadEnvelopesRequest(any(), anyLong());
@@ -706,7 +784,9 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandlerTest {
         verify(combinedChainDataClient, never()).getBlockAtSlotExact(envelope.getSlot());
       }
     }
-    // Finalized slots are unblinded in one batch, head chain slots are read one by one, in order
+    // Slots are retrieved in batches in slot order whichever side of the finalized block they are
+    // on: only resolving the root differs, from the database below it and from the head chain
+    // nodes from it onwards
     final InOrder inOrder = inOrder(combinedChainDataClient, callback);
     inOrder
         .verify(combinedChainDataClient)
@@ -715,13 +795,20 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandlerTest {
     inOrder.verify(callback).respond(allEnvelopes.get(1));
     inOrder
         .verify(combinedChainDataClient)
-        .getExecutionPayloadByBlockRoot(chainBuilder.getBlockAtSlot(3).getRoot());
+        .getExecutionPayloadsByBlockRoots(blockRootsAtSlots(3, 4));
     inOrder.verify(callback).respond(allEnvelopes.get(2));
     inOrder.verify(callback).respond(allEnvelopes.get(3));
+    inOrder.verify(combinedChainDataClient).getExecutionPayloadsByBlockRoots(blockRootsAtSlots(5));
     inOrder.verify(callback).respond(allEnvelopes.get(4));
-    verify(combinedChainDataClient, times(1)).getExecutionPayloadsByBlockRoots(any());
+    verify(combinedChainDataClient, times(3)).getExecutionPayloadsByBlockRoots(any());
+    verify(combinedChainDataClient, never()).getExecutionPayloadByBlockRoot(any());
     verify(callback).completeSuccessfully();
     verify(peer, never()).adjustExecutionPayloadEnvelopesRequest(any(), anyLong());
+  }
+
+  private void fillRequestLimitWithOtherPeers() {
+    assertThat(requestLimiter.tryAcquire(new MockNodeId(2))).isTrue();
+    assertThat(requestLimiter.tryAcquire(new MockNodeId(3))).isTrue();
   }
 
   private void stubCurrentEpoch(final int epochsAfterMinEpochsForBlockRequests) {

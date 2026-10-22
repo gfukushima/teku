@@ -49,6 +49,8 @@ import tech.pegasys.teku.networking.eth2.rpc.beaconchain.BeaconChainMethodIds;
 import tech.pegasys.teku.networking.eth2.rpc.core.ResponseCallback;
 import tech.pegasys.teku.networking.eth2.rpc.core.RpcException;
 import tech.pegasys.teku.networking.eth2.rpc.core.encodings.RpcEncoding;
+import tech.pegasys.teku.networking.p2p.mock.MockNodeId;
+import tech.pegasys.teku.networking.p2p.peer.NodeId;
 import tech.pegasys.teku.networking.p2p.rpc.StreamClosedException;
 import tech.pegasys.teku.spec.Spec;
 import tech.pegasys.teku.spec.TestSpecFactory;
@@ -78,9 +80,10 @@ class ExecutionPayloadEnvelopesByRootMessageHandlerTest {
   private final CombinedChainDataClient combinedChainDataClient =
       mock(CombinedChainDataClient.class);
   private final StubMetricsSystem metricsSystem = new StubMetricsSystem();
-  // A single request may be served at a time
+  private static final NodeId PEER_ID = new MockNodeId(1);
+  // Two requests may be served at a time, one per peer
   private final ExecutionPayloadEnvelopesRequestLimiter requestLimiter =
-      new ExecutionPayloadEnvelopesRequestLimiter(1);
+      new ExecutionPayloadEnvelopesRequestLimiter(2, 1);
 
   final ExecutionPayloadEnvelopesByRootMessageHandler handler =
       new ExecutionPayloadEnvelopesByRootMessageHandler(
@@ -95,6 +98,7 @@ class ExecutionPayloadEnvelopesByRootMessageHandlerTest {
   public void setup() {
     chainBuilder.generateGenesis();
     when(combinedChainDataClient.getRecentChainData()).thenReturn(recentChainData);
+    when(peer.getId()).thenReturn(PEER_ID);
     when(peer.approveRequest()).thenReturn(true);
     when(peer.approveExecutionPayloadEnvelopesRequest(any(), anyLong()))
         .thenReturn(Optional.of(new RequestKey(ZERO, 42)));
@@ -253,8 +257,9 @@ class ExecutionPayloadEnvelopesByRootMessageHandlerTest {
   @Test
   public void onIncomingMessage_shouldRejectRequestWhenTooManyAreBeingServed() {
     final List<SignedExecutionPayloadEnvelope> envelopes = buildChain(2);
-    // Another request is already being served
-    assertThat(requestLimiter.tryAcquire()).isTrue();
+    // Other peers' requests already fill the limit
+    assertThat(requestLimiter.tryAcquire(new MockNodeId(2))).isTrue();
+    assertThat(requestLimiter.tryAcquire(new MockNodeId(3))).isTrue();
 
     final ExecutionPayloadEnvelopesByRootRequestMessage message =
         createRequestFromExecutionPayloadEnvelopes(envelopes);
@@ -282,7 +287,7 @@ class ExecutionPayloadEnvelopesByRootMessageHandlerTest {
     handler.onIncomingMessage(V2_PROTOCOL_ID, peer, message, callback);
 
     verify(callback).completeSuccessfully();
-    assertThat(requestLimiter.tryAcquire()).isTrue();
+    assertThat(requestLimiter.tryAcquire(PEER_ID)).isTrue();
   }
 
   @Test
@@ -297,7 +302,28 @@ class ExecutionPayloadEnvelopesByRootMessageHandlerTest {
     handler.onIncomingMessage(V2_PROTOCOL_ID, peer, message, callback);
 
     verify(callback).completeWithUnexpectedError(any());
-    assertThat(requestLimiter.tryAcquire()).isTrue();
+    assertThat(requestLimiter.tryAcquire(PEER_ID)).isTrue();
+  }
+
+  @Test
+  public void onIncomingMessage_shouldRejectRequestWhenPeerAlreadyHasItsShareOfRequests() {
+    final List<SignedExecutionPayloadEnvelope> envelopes = buildChain(2);
+    // The limit has room, but this peer already has a request being served
+    assertThat(requestLimiter.tryAcquire(PEER_ID)).isTrue();
+
+    final ExecutionPayloadEnvelopesByRootRequestMessage message =
+        createRequestFromExecutionPayloadEnvelopes(envelopes);
+    handler.onIncomingMessage(V2_PROTOCOL_ID, peer, message, callback);
+
+    verify(callback)
+        .completeWithErrorResponse(any(RpcException.ResourceUnavailableException.class));
+    verify(callback, never()).respond(any());
+    verify(callback, never()).completeSuccessfully();
+    verify(combinedChainDataClient, never()).getSlotByBlockRoot(any());
+    verify(peer, never()).adjustExecutionPayloadEnvelopesRequest(any(), anyLong());
+    assertThat(getRequestCounterValueForLabel("concurrency_limited")).isOne();
+    // Another peer is still admitted
+    assertThat(requestLimiter.tryAcquire(new MockNodeId(2))).isTrue();
   }
 
   @Test

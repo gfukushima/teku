@@ -129,12 +129,12 @@ public abstract class AbstractExecutionPayloadEnvelopesMessageHandler<
 
     final TRequestState requestState = createRequestState(message, callback);
 
-    // Envelopes of finalized blocks are unblinded through the execution layer, so only a bounded
-    // number of requests needing that is served at a time. Requests that don't need it are cheap
-    // and are never held back by that cap. A rejected request still counts against the peer's
-    // rate limits.
+    // Envelopes not held in memory are unblinded through the execution layer, so only a bounded
+    // number of requests needing that is served at a time, in total and per peer. Requests that
+    // don't need it are cheap and are never held back by that cap. A rejected request still
+    // counts against the peer's rate limits.
     final boolean needsUnblinding = requestState.needsUnblinding();
-    if (needsUnblinding && !requestLimiter.tryAcquire()) {
+    if (needsUnblinding && !requestLimiter.tryAcquire(peer.getId())) {
       requestCounter.labels("concurrency_limited").inc();
       callback.completeWithErrorResponse(
           new ResourceUnavailableException(
@@ -146,7 +146,7 @@ public abstract class AbstractExecutionPayloadEnvelopesMessageHandler<
 
     SafeFuture<Void> response = serve(requestState);
     if (needsUnblinding) {
-      response = response.alwaysRun(requestLimiter::release);
+      response = response.alwaysRun(() -> requestLimiter.release(peer.getId()));
     }
 
     response.finish(

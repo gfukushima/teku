@@ -16,38 +16,86 @@ package tech.pegasys.teku.networking.eth2.rpc.beaconchain.methods;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import org.junit.jupiter.api.Test;
+import tech.pegasys.teku.networking.p2p.mock.MockNodeId;
+import tech.pegasys.teku.networking.p2p.peer.NodeId;
 
 class ExecutionPayloadEnvelopesRequestLimiterTest {
 
-  private final ExecutionPayloadEnvelopesRequestLimiter limiter =
-      new ExecutionPayloadEnvelopesRequestLimiter(2);
+  private final NodeId peerA = new MockNodeId(1);
+  private final NodeId peerB = new MockNodeId(2);
+  private final NodeId peerC = new MockNodeId(3);
 
   @Test
   void shouldAdmitRequestsUpToTheLimit() {
-    assertThat(limiter.tryAcquire()).isTrue();
-    assertThat(limiter.tryAcquire()).isTrue();
+    final ExecutionPayloadEnvelopesRequestLimiter limiter =
+        new ExecutionPayloadEnvelopesRequestLimiter(2, 2);
 
-    assertThat(limiter.tryAcquire()).isFalse();
+    assertThat(limiter.tryAcquire(peerA)).isTrue();
+    assertThat(limiter.tryAcquire(peerB)).isTrue();
+
+    assertThat(limiter.tryAcquire(peerC)).isFalse();
   }
 
   @Test
   void shouldAdmitAnotherRequestOnceOneIsReleased() {
-    assertThat(limiter.tryAcquire()).isTrue();
-    assertThat(limiter.tryAcquire()).isTrue();
+    final ExecutionPayloadEnvelopesRequestLimiter limiter =
+        new ExecutionPayloadEnvelopesRequestLimiter(2, 2);
+    assertThat(limiter.tryAcquire(peerA)).isTrue();
+    assertThat(limiter.tryAcquire(peerB)).isTrue();
 
-    limiter.release();
+    limiter.release(peerA);
 
-    assertThat(limiter.tryAcquire()).isTrue();
-    assertThat(limiter.tryAcquire()).isFalse();
+    assertThat(limiter.tryAcquire(peerC)).isTrue();
+    assertThat(limiter.tryAcquire(peerA)).isFalse();
   }
 
   @Test
   void shouldNotAdmitMoreThanTheLimitAfterSpuriousRelease() {
+    final ExecutionPayloadEnvelopesRequestLimiter limiter =
+        new ExecutionPayloadEnvelopesRequestLimiter(2, 2);
     // A release without a matching acquisition must not raise the limit
-    limiter.release();
+    limiter.release(peerA);
 
-    assertThat(limiter.tryAcquire()).isTrue();
-    assertThat(limiter.tryAcquire()).isTrue();
-    assertThat(limiter.tryAcquire()).isFalse();
+    assertThat(limiter.tryAcquire(peerA)).isTrue();
+    assertThat(limiter.tryAcquire(peerB)).isTrue();
+    assertThat(limiter.tryAcquire(peerC)).isFalse();
+  }
+
+  @Test
+  void shouldNotAdmitMoreThanThePeerShareForOnePeer() {
+    final ExecutionPayloadEnvelopesRequestLimiter limiter =
+        new ExecutionPayloadEnvelopesRequestLimiter(4, 2);
+    assertThat(limiter.tryAcquire(peerA)).isTrue();
+    assertThat(limiter.tryAcquire(peerA)).isTrue();
+
+    // The limit still has room, but this peer has used its share
+    assertThat(limiter.tryAcquire(peerA)).isFalse();
+    assertThat(limiter.tryAcquire(peerB)).isTrue();
+  }
+
+  @Test
+  void shouldAdmitPeerAgainOnceOneOfItsRequestsIsReleased() {
+    final ExecutionPayloadEnvelopesRequestLimiter limiter =
+        new ExecutionPayloadEnvelopesRequestLimiter(4, 2);
+    assertThat(limiter.tryAcquire(peerA)).isTrue();
+    assertThat(limiter.tryAcquire(peerA)).isTrue();
+
+    limiter.release(peerA);
+
+    assertThat(limiter.tryAcquire(peerA)).isTrue();
+    assertThat(limiter.tryAcquire(peerA)).isFalse();
+  }
+
+  @Test
+  void shouldNotLetAnotherPeersReleaseRaiseAPeersShare() {
+    final ExecutionPayloadEnvelopesRequestLimiter limiter =
+        new ExecutionPayloadEnvelopesRequestLimiter(4, 2);
+    assertThat(limiter.tryAcquire(peerA)).isTrue();
+    assertThat(limiter.tryAcquire(peerA)).isTrue();
+
+    // A release for a peer with no request in flight must not free anything
+    limiter.release(peerB);
+
+    assertThat(limiter.tryAcquire(peerA)).isFalse();
   }
 }

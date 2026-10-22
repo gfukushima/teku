@@ -64,8 +64,10 @@ public class Constants {
   public static final int MAXIMUM_CONCURRENT_EE_PAYLOAD_BODIES_REQUESTS = 2;
   public static final int MAXIMUM_QUEUED_EE_PAYLOAD_BODIES_REQUESTS = 128;
   public static final int MAXIMUM_CONCURRENT_NON_CRITICAL_EB_REQUESTS = 3;
-  // Execution payload envelope requests from peers that need envelopes unblinded through the EL
+  // Execution payload envelope requests from peers, whose envelopes may need unblinding through
+  // the EL, served at the same time in total and per peer
   public static final int MAXIMUM_CONCURRENT_EXECUTION_PAYLOAD_ENVELOPE_REQUESTS = 16;
+  public static final int MAXIMUM_CONCURRENT_EXECUTION_PAYLOAD_ENVELOPE_REQUESTS_PER_PEER = 2;
   public static final int REPUTATION_MANAGER_CAPACITY = 1024;
   public static final Duration STORAGE_REQUEST_TIMEOUT = Duration.ofSeconds(60);
   public static final int STORAGE_QUERY_CHANNEL_PARALLELISM = 20; // # threads
