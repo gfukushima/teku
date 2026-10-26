@@ -15,6 +15,8 @@ package tech.pegasys.teku.networking.eth2.rpc.core;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import io.netty.buffer.ByteBuf;
 import java.util.ArrayList;
@@ -24,24 +26,32 @@ import org.apache.tuweni.bytes.Bytes;
 import org.junit.jupiter.api.Test;
 import tech.pegasys.teku.infrastructure.bytes.Bytes4;
 import tech.pegasys.teku.infrastructure.ssz.schema.SszSchema;
+import tech.pegasys.teku.infrastructure.unsigned.UInt64;
+import tech.pegasys.teku.networking.eth2.rpc.core.RpcException.ContextPayloadMismatchException;
 import tech.pegasys.teku.networking.eth2.rpc.core.RpcException.DeserializationFailedException;
 import tech.pegasys.teku.networking.eth2.rpc.core.RpcException.LengthOutOfBoundsException;
 import tech.pegasys.teku.networking.eth2.rpc.core.RpcException.MessageTruncatedException;
 import tech.pegasys.teku.networking.eth2.rpc.core.RpcException.PayloadTruncatedException;
 import tech.pegasys.teku.networking.eth2.rpc.core.encodings.RpcByteBufDecoder;
+import tech.pegasys.teku.networking.eth2.rpc.core.encodings.context.ForkDigestPayloadContext;
 import tech.pegasys.teku.networking.eth2.rpc.core.encodings.context.RpcContextCodec;
 import tech.pegasys.teku.networking.eth2.rpc.core.encodings.context.TestForkDigestContextDecoder;
 import tech.pegasys.teku.spec.Spec;
+import tech.pegasys.teku.spec.SpecMilestone;
 import tech.pegasys.teku.spec.TestSpecFactory;
+import tech.pegasys.teku.spec.datastructures.blobs.DataColumnSidecar;
 import tech.pegasys.teku.spec.datastructures.networking.libp2p.rpc.BeaconBlocksByRootRequestMessage;
 import tech.pegasys.teku.spec.datastructures.state.beaconstate.BeaconState;
 import tech.pegasys.teku.spec.datastructures.state.beaconstate.versions.altair.BeaconStateSchemaAltair;
 import tech.pegasys.teku.spec.datastructures.state.beaconstate.versions.phase0.BeaconStateSchemaPhase0;
 import tech.pegasys.teku.spec.util.DataStructureUtil;
+import tech.pegasys.teku.storage.client.RecentChainData;
 
 class RpcResponseDecoderTest extends RpcDecoderTestBase {
   private static final Bytes SUCCESS_CODE = Bytes.of(RpcResponseStatus.SUCCESS_RESPONSE_CODE);
   private static final Bytes ERROR_CODE = Bytes.of(1);
+  private static final UInt64 GLOAS_FORK_EPOCH = UInt64.ONE;
+  private static final Bytes4 FULU_FORK_DIGEST = Bytes4.fromHexStringLenient("0x0a");
 
   private final RpcResponseDecoder<BeaconBlocksByRootRequestMessage, ?> decoder = responseDecoder;
 
@@ -303,6 +313,84 @@ class RpcResponseDecoderTest extends RpcDecoderTestBase {
     }
   }
 
+  @Test
+  public void decodeNextResponse_shouldRejectPayloadOutsideTheContextFork() {
+    final Spec transitionSpec = TestSpecFactory.createMinimalWithGloasForkEpoch(GLOAS_FORK_EPOCH);
+    final DataColumnSidecar sidecar =
+        fuluSchemaSidecarAtSlot(transitionSpec.computeStartSlotAtEpoch(GLOAS_FORK_EPOCH));
+    final Bytes serializedSidecar = sidecar.sszSerialize();
+
+    for (List<ByteBuf> testByteBufSlice :
+        testByteBufSlices(
+            SUCCESS_CODE,
+            FULU_FORK_DIGEST.getWrappedBytes(),
+            getLengthPrefix(serializedSidecar.size()),
+            compressor.compress(serializedSidecar))) {
+      final RpcResponseDecoder<DataColumnSidecar, Bytes4> decoder =
+          createDataColumnSidecarDecoder(transitionSpec);
+      final List<DataColumnSidecar> results = new ArrayList<>();
+      final List<Exception> failures = new ArrayList<>();
+      for (ByteBuf byteBuf : testByteBufSlice) {
+        try {
+          if (failures.isEmpty()) {
+            results.addAll(decoder.decodeNextResponses(byteBuf));
+          }
+        } catch (final Exception e) {
+          failures.add(e);
+        } finally {
+          byteBuf.release();
+        }
+      }
+      assertThat(results).isEmpty();
+      assertThat(failures).hasSize(1);
+      assertThat(failures.get(0)).isInstanceOf(ContextPayloadMismatchException.class);
+      assertThat(testByteBufSlice).allSatisfy(b -> assertThat(b.refCnt()).isEqualTo(0));
+    }
+  }
+
+  @Test
+  public void decodeNextResponse_shouldAcceptPayloadInTheContextFork() throws Exception {
+    final Spec transitionSpec = TestSpecFactory.createMinimalWithGloasForkEpoch(GLOAS_FORK_EPOCH);
+    final DataColumnSidecar sidecar = fuluSchemaSidecarAtSlot(UInt64.ONE);
+    final Bytes serializedSidecar = sidecar.sszSerialize();
+
+    for (List<ByteBuf> testByteBufSlice :
+        testByteBufSlices(
+            SUCCESS_CODE,
+            FULU_FORK_DIGEST.getWrappedBytes(),
+            getLengthPrefix(serializedSidecar.size()),
+            compressor.compress(serializedSidecar))) {
+      final RpcResponseDecoder<DataColumnSidecar, Bytes4> decoder =
+          createDataColumnSidecarDecoder(transitionSpec);
+      final List<DataColumnSidecar> results = new ArrayList<>();
+      for (ByteBuf byteBuf : testByteBufSlice) {
+        results.addAll(decoder.decodeNextResponses(byteBuf));
+        byteBuf.release();
+      }
+      decoder.complete();
+      assertThat(results).containsExactly(sidecar);
+      assertThat(testByteBufSlice).allSatisfy(b -> assertThat(b.refCnt()).isEqualTo(0));
+    }
+  }
+
+  private static DataColumnSidecar fuluSchemaSidecarAtSlot(final UInt64 slot) {
+    final DataStructureUtil fuluDataStructureUtil =
+        new DataStructureUtil(TestSpecFactory.createMinimalFulu());
+    return fuluDataStructureUtil.randomDataColumnSidecar(
+        fuluDataStructureUtil.randomSignedBeaconBlockHeader(slot), UInt64.ZERO);
+  }
+
+  private RpcResponseDecoder<DataColumnSidecar, Bytes4> createDataColumnSidecarDecoder(
+      final Spec transitionSpec) {
+    final RecentChainData recentChainData = mock(RecentChainData.class);
+    when(recentChainData.getMilestoneByForkDigest(FULU_FORK_DIGEST))
+        .thenReturn(Optional.of(SpecMilestone.FULU));
+    return RpcResponseDecoder.create(
+        encoding,
+        RpcContextCodec.forkDigest(
+            transitionSpec, recentChainData, ForkDigestPayloadContext.DATA_COLUMN_SIDECAR));
+  }
+
   private BeaconState beaconState(final boolean usePhase0State) {
     final Spec spec =
         usePhase0State
@@ -367,6 +455,12 @@ class RpcResponseDecoderTest extends RpcDecoderTestBase {
         schema = Optional.of(altairSchema);
       }
       return schema;
+    }
+
+    @Override
+    public void verifyPayloadMatchesContext(
+        final Bytes4 forkDigest, final BeaconState responsePayload) {
+      // Unused for these tests
     }
   }
 }

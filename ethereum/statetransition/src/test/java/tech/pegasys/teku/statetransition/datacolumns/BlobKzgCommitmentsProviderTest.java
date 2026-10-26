@@ -100,8 +100,10 @@ class BlobKzgCommitmentsProviderTest {
   }
 
   @Test
-  void returnsSidecarCommitmentsWithoutStoringThem() {
+  void returnsFuluSidecarCommitmentsWithoutStoringThem() {
     final Spec fuluSpec = TestSpecFactory.createMinimalFulu();
+    final BlobKzgCommitmentsProvider fuluProvider =
+        new BlobKzgCommitmentsProvider(fuluSpec, combinedChainDataClient, 2);
     final DataStructureUtil fuluDataStructureUtil = new DataStructureUtil(fuluSpec);
     final SignedBeaconBlock block =
         fuluDataStructureUtil.randomSignedBeaconBlockWithCommitments(UInt64.ONE, 2);
@@ -110,10 +112,42 @@ class BlobKzgCommitmentsProviderTest {
     final SszList<SszKZGCommitment> commitments =
         dataColumnSidecar.getMaybeKzgCommitments().orElseThrow();
 
-    assertThat(provider.getBlobKzgCommitments(dataColumnSidecar).join()).contains(commitments);
-    assertThat(provider.getBlobKzgCommitments(dataColumnSidecar.getBeaconBlockRoot()).join())
+    assertThat(fuluProvider.getBlobKzgCommitments(dataColumnSidecar).join()).contains(commitments);
+    assertThat(fuluProvider.getBlobKzgCommitments(dataColumnSidecar.getBeaconBlockRoot()).join())
         .isEmpty();
     verify(combinedChainDataClient).getBlockByBlockRoot(dataColumnSidecar.getBeaconBlockRoot());
+  }
+
+  @Test
+  void ignoresCommitmentsCarriedBySidecarAtGloasSlot() {
+    final DataStructureUtil fuluDataStructureUtil =
+        new DataStructureUtil(TestSpecFactory.createMinimalFulu());
+    final DataColumnSidecar sidecarWithOwnCommitments =
+        fuluDataStructureUtil.randomDataColumnSidecar(
+            fuluDataStructureUtil.randomSignedBeaconBlockHeader(UInt64.ONE), UInt64.ZERO);
+    assertThat(sidecarWithOwnCommitments.getMaybeKzgCommitments()).isPresent();
+
+    assertThat(provider.getBlobKzgCommitments(sidecarWithOwnCommitments).join()).isEmpty();
+    verify(combinedChainDataClient)
+        .getBlockByBlockRoot(sidecarWithOwnCommitments.getBeaconBlockRoot());
+  }
+
+  @Test
+  void resolvesCommitmentsByRootForSidecarAtGloasSlotCarryingCommitments() {
+    final SignedBeaconBlock block =
+        dataStructureUtil.randomSignedBeaconBlockWithCommitments(UInt64.ONE, 2);
+    final SszList<SszKZGCommitment> bidCommitments =
+        block.getMessage().getBody().getOptionalBlobKzgCommitments().orElseThrow();
+    final DataStructureUtil fuluDataStructureUtil =
+        new DataStructureUtil(TestSpecFactory.createMinimalFulu());
+    final DataColumnSidecar sidecarWithOwnCommitments =
+        fuluDataStructureUtil.randomDataColumnSidecar(block.asHeader(), UInt64.ZERO);
+    provider.onNewBlock(block);
+
+    assertThat(provider.getBlobKzgCommitments(sidecarWithOwnCommitments).join())
+        .contains(bidCommitments);
+    assertThat(sidecarWithOwnCommitments.getMaybeKzgCommitments().orElseThrow().hashTreeRoot())
+        .isNotEqualTo(bidCommitments.hashTreeRoot());
   }
 
   @Test

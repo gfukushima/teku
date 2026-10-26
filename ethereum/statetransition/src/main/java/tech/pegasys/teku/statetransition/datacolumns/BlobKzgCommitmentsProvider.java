@@ -24,6 +24,7 @@ import tech.pegasys.teku.infrastructure.collections.LimitedMap;
 import tech.pegasys.teku.infrastructure.ssz.SszList;
 import tech.pegasys.teku.infrastructure.unsigned.UInt64;
 import tech.pegasys.teku.spec.Spec;
+import tech.pegasys.teku.spec.SpecMilestone;
 import tech.pegasys.teku.spec.datastructures.blobs.DataColumnSidecar;
 import tech.pegasys.teku.spec.datastructures.blocks.SignedBeaconBlock;
 import tech.pegasys.teku.spec.datastructures.state.Checkpoint;
@@ -40,10 +41,10 @@ import tech.pegasys.teku.storage.client.CombinedChainDataClient;
  * blob_kzg_commitments}; consequently a root to commitments entry is immutable and can be populated
  * before full block import without conflict risk.
  *
- * <p>When a data column sidecar already carries commitments, as in Fulu, those commitments are
- * returned directly without caching. The cache is only a temporary pre-import source for forks
- * where the sidecar omits commitments, as in Gloas. Store lookup is retained as a lazy fallback for
- * cache misses.
+ * <p>When a data column sidecar carries commitments and the fork at its slot defines them, as in
+ * Fulu, they are returned directly without caching; from Gloas on only the block's bid is trusted.
+ * The cache is only a temporary pre-import source for forks where the sidecar omits commitments.
+ * Store lookup is retained as a lazy fallback for cache misses.
  */
 public class BlobKzgCommitmentsProvider
     implements ReceivedBlockEventsChannel, FinalizedCheckpointChannel {
@@ -77,8 +78,14 @@ public class BlobKzgCommitmentsProvider
       final DataColumnSidecar dataColumnSidecar) {
     return dataColumnSidecar
         .getMaybeKzgCommitments()
+        .filter(__ -> sidecarCarriesAuthoritativeCommitments(dataColumnSidecar))
         .map(commitments -> SafeFuture.completedFuture(Optional.of(commitments)))
         .orElseGet(() -> getBlobKzgCommitments(dataColumnSidecar.getBeaconBlockRoot()));
+  }
+
+  private boolean sidecarCarriesAuthoritativeCommitments(
+      final DataColumnSidecar dataColumnSidecar) {
+    return spec.atSlot(dataColumnSidecar.getSlot()).getMilestone().isLessThan(SpecMilestone.GLOAS);
   }
 
   @VisibleForTesting

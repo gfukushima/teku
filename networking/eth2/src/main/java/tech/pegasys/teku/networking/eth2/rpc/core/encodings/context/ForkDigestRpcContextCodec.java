@@ -19,6 +19,9 @@ import tech.pegasys.teku.infrastructure.bytes.Bytes4;
 import tech.pegasys.teku.infrastructure.ssz.SszData;
 import tech.pegasys.teku.infrastructure.ssz.schema.SszSchema;
 import tech.pegasys.teku.infrastructure.unsigned.UInt64;
+import tech.pegasys.teku.networking.eth2.rpc.core.RpcException;
+import tech.pegasys.teku.networking.eth2.rpc.core.RpcException.ContextPayloadMismatchException;
+import tech.pegasys.teku.networking.eth2.rpc.core.RpcException.UnrecognizedContextBytesException;
 import tech.pegasys.teku.networking.eth2.rpc.core.encodings.RpcByteBufDecoder;
 import tech.pegasys.teku.spec.Spec;
 import tech.pegasys.teku.spec.SpecMilestone;
@@ -62,5 +65,25 @@ class ForkDigestRpcContextCodec<TPayload extends SszData>
         .map(spec::forMilestone)
         .map(SpecVersion::getSchemaDefinitions)
         .map(payloadContext::getSchemaFromSchemaDefinitions);
+  }
+
+  @Override
+  public void verifyPayloadMatchesContext(final Bytes4 forkDigest, final TPayload responsePayload)
+      throws RpcException {
+    if (!payloadContext.rejectsContextSlotMismatch()) {
+      return;
+    }
+    final SpecMilestone contextMilestone =
+        recentChainData
+            .getMilestoneByForkDigest(forkDigest)
+            .orElseThrow(() -> new UnrecognizedContextBytesException(forkDigest.toString()));
+    final UInt64 payloadSlot = payloadContext.getSlotFromPayload(responsePayload);
+    final SpecMilestone payloadMilestone = spec.atSlot(payloadSlot).getMilestone();
+    if (!contextMilestone.equals(payloadMilestone)) {
+      throw new ContextPayloadMismatchException(
+          String.format(
+              "fork digest %s is %s but slot %s is in %s",
+              forkDigest, contextMilestone, payloadSlot, payloadMilestone));
+    }
   }
 }
