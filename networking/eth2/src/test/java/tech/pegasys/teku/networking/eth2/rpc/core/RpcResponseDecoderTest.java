@@ -15,10 +15,13 @@ package tech.pegasys.teku.networking.eth2.rpc.core;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -52,6 +55,7 @@ class RpcResponseDecoderTest extends RpcDecoderTestBase {
   private static final Bytes ERROR_CODE = Bytes.of(1);
   private static final UInt64 GLOAS_FORK_EPOCH = UInt64.ONE;
   private static final Bytes4 FULU_FORK_DIGEST = Bytes4.fromHexStringLenient("0x0a");
+  private static final Bytes4 GLOAS_FORK_DIGEST = Bytes4.fromHexStringLenient("0x0b");
 
   private final RpcResponseDecoder<BeaconBlocksByRootRequestMessage, ?> decoder = responseDecoder;
 
@@ -320,7 +324,7 @@ class RpcResponseDecoderTest extends RpcDecoderTestBase {
         fuluSchemaSidecarAtSlot(transitionSpec.computeStartSlotAtEpoch(GLOAS_FORK_EPOCH));
     final Bytes serializedSidecar = sidecar.sszSerialize();
 
-    for (List<ByteBuf> testByteBufSlice :
+    for (final List<ByteBuf> testByteBufSlice :
         testByteBufSlices(
             SUCCESS_CODE,
             FULU_FORK_DIGEST.getWrappedBytes(),
@@ -330,7 +334,7 @@ class RpcResponseDecoderTest extends RpcDecoderTestBase {
           createDataColumnSidecarDecoder(transitionSpec);
       final List<DataColumnSidecar> results = new ArrayList<>();
       final List<Exception> failures = new ArrayList<>();
-      for (ByteBuf byteBuf : testByteBufSlice) {
+      for (final ByteBuf byteBuf : testByteBufSlice) {
         try {
           if (failures.isEmpty()) {
             results.addAll(decoder.decodeNextResponses(byteBuf));
@@ -354,7 +358,7 @@ class RpcResponseDecoderTest extends RpcDecoderTestBase {
     final DataColumnSidecar sidecar = fuluSchemaSidecarAtSlot(UInt64.ONE);
     final Bytes serializedSidecar = sidecar.sszSerialize();
 
-    for (List<ByteBuf> testByteBufSlice :
+    for (final List<ByteBuf> testByteBufSlice :
         testByteBufSlices(
             SUCCESS_CODE,
             FULU_FORK_DIGEST.getWrappedBytes(),
@@ -363,7 +367,7 @@ class RpcResponseDecoderTest extends RpcDecoderTestBase {
       final RpcResponseDecoder<DataColumnSidecar, Bytes4> decoder =
           createDataColumnSidecarDecoder(transitionSpec);
       final List<DataColumnSidecar> results = new ArrayList<>();
-      for (ByteBuf byteBuf : testByteBufSlice) {
+      for (final ByteBuf byteBuf : testByteBufSlice) {
         results.addAll(decoder.decodeNextResponses(byteBuf));
         byteBuf.release();
       }
@@ -371,6 +375,33 @@ class RpcResponseDecoderTest extends RpcDecoderTestBase {
       assertThat(results).containsExactly(sidecar);
       assertThat(testByteBufSlice).allSatisfy(b -> assertThat(b.refCnt()).isEqualTo(0));
     }
+  }
+
+  @Test
+  public void decodeNextResponse_shouldDropAlreadyDecodedChunksWhenALaterChunkMismatches() {
+    final Spec transitionSpec = TestSpecFactory.createMinimalWithGloasForkEpoch(GLOAS_FORK_EPOCH);
+    final Bytes validSidecar = fuluSchemaSidecarAtSlot(UInt64.ONE).sszSerialize();
+    final Bytes mislabelledSidecar =
+        fuluSchemaSidecarAtSlot(transitionSpec.computeStartSlotAtEpoch(GLOAS_FORK_EPOCH))
+            .sszSerialize();
+    final ByteBuf buffer =
+        Unpooled.wrappedBuffer(
+            Bytes.concatenate(
+                    SUCCESS_CODE,
+                    FULU_FORK_DIGEST.getWrappedBytes(),
+                    getLengthPrefix(validSidecar.size()),
+                    compressor.compress(validSidecar),
+                    SUCCESS_CODE,
+                    FULU_FORK_DIGEST.getWrappedBytes(),
+                    getLengthPrefix(mislabelledSidecar.size()),
+                    compressor.compress(mislabelledSidecar))
+                .toArrayUnsafe());
+    final RpcResponseDecoder<DataColumnSidecar, Bytes4> decoder =
+        createDataColumnSidecarDecoder(transitionSpec);
+
+    assertThatThrownBy(() -> decoder.decodeNextResponses(buffer))
+        .isInstanceOf(ContextPayloadMismatchException.class);
+    buffer.release();
   }
 
   private static DataColumnSidecar fuluSchemaSidecarAtSlot(final UInt64 slot) {
@@ -385,6 +416,9 @@ class RpcResponseDecoderTest extends RpcDecoderTestBase {
     final RecentChainData recentChainData = mock(RecentChainData.class);
     when(recentChainData.getMilestoneByForkDigest(FULU_FORK_DIGEST))
         .thenReturn(Optional.of(SpecMilestone.FULU));
+    when(recentChainData.getForkDigest(eq(SpecMilestone.FULU), any())).thenReturn(FULU_FORK_DIGEST);
+    when(recentChainData.getForkDigest(eq(SpecMilestone.GLOAS), any()))
+        .thenReturn(GLOAS_FORK_DIGEST);
     return RpcResponseDecoder.create(
         encoding,
         RpcContextCodec.forkDigest(

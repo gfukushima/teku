@@ -24,7 +24,6 @@ import tech.pegasys.teku.infrastructure.collections.LimitedMap;
 import tech.pegasys.teku.infrastructure.ssz.SszList;
 import tech.pegasys.teku.infrastructure.unsigned.UInt64;
 import tech.pegasys.teku.spec.Spec;
-import tech.pegasys.teku.spec.SpecMilestone;
 import tech.pegasys.teku.spec.datastructures.blobs.DataColumnSidecar;
 import tech.pegasys.teku.spec.datastructures.blocks.SignedBeaconBlock;
 import tech.pegasys.teku.spec.datastructures.state.Checkpoint;
@@ -76,16 +75,10 @@ public class BlobKzgCommitmentsProvider
 
   public SafeFuture<Optional<SszList<SszKZGCommitment>>> getBlobKzgCommitments(
       final DataColumnSidecar dataColumnSidecar) {
-    return dataColumnSidecar
-        .getMaybeKzgCommitments()
-        .filter(__ -> sidecarCarriesAuthoritativeCommitments(dataColumnSidecar))
+    return spec.getDataColumnSidecarUtil(dataColumnSidecar.getSlot())
+        .getMaybeKzgCommitments(dataColumnSidecar)
         .map(commitments -> SafeFuture.completedFuture(Optional.of(commitments)))
         .orElseGet(() -> getBlobKzgCommitments(dataColumnSidecar.getBeaconBlockRoot()));
-  }
-
-  private boolean sidecarCarriesAuthoritativeCommitments(
-      final DataColumnSidecar dataColumnSidecar) {
-    return spec.atSlot(dataColumnSidecar.getSlot()).getMilestone().isLessThan(SpecMilestone.GLOAS);
   }
 
   @VisibleForTesting

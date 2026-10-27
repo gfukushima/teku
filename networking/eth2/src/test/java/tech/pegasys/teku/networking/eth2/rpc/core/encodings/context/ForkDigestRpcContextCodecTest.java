@@ -15,16 +15,16 @@ package tech.pegasys.teku.networking.eth2.rpc.core.encodings.context;
 
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import tech.pegasys.teku.infrastructure.bytes.Bytes4;
 import tech.pegasys.teku.infrastructure.unsigned.UInt64;
 import tech.pegasys.teku.networking.eth2.rpc.core.RpcException.ContextPayloadMismatchException;
-import tech.pegasys.teku.networking.eth2.rpc.core.RpcException.UnrecognizedContextBytesException;
 import tech.pegasys.teku.spec.Spec;
 import tech.pegasys.teku.spec.SpecMilestone;
 import tech.pegasys.teku.spec.TestSpecFactory;
@@ -37,7 +37,7 @@ class ForkDigestRpcContextCodecTest {
   private static final UInt64 GLOAS_FORK_EPOCH = UInt64.valueOf(2);
   private static final Bytes4 FULU_FORK_DIGEST = Bytes4.fromHexStringLenient("0x01");
   private static final Bytes4 GLOAS_FORK_DIGEST = Bytes4.fromHexStringLenient("0x02");
-  private static final Bytes4 UNKNOWN_FORK_DIGEST = Bytes4.fromHexStringLenient("0x03");
+  private static final Bytes4 OTHER_FULU_DIGEST = Bytes4.fromHexStringLenient("0x03");
 
   private final Spec spec = TestSpecFactory.createMinimalWithGloasForkEpoch(GLOAS_FORK_EPOCH);
   private final DataStructureUtil dataStructureUtil = new DataStructureUtil(spec);
@@ -54,16 +54,13 @@ class ForkDigestRpcContextCodecTest {
 
   @BeforeEach
   void setUp() {
-    when(recentChainData.getMilestoneByForkDigest(FULU_FORK_DIGEST))
-        .thenReturn(Optional.of(SpecMilestone.FULU));
-    when(recentChainData.getMilestoneByForkDigest(GLOAS_FORK_DIGEST))
-        .thenReturn(Optional.of(SpecMilestone.GLOAS));
-    when(recentChainData.getMilestoneByForkDigest(UNKNOWN_FORK_DIGEST))
-        .thenReturn(Optional.empty());
+    when(recentChainData.getForkDigest(eq(SpecMilestone.FULU), any())).thenReturn(FULU_FORK_DIGEST);
+    when(recentChainData.getForkDigest(eq(SpecMilestone.GLOAS), any()))
+        .thenReturn(GLOAS_FORK_DIGEST);
   }
 
   @Test
-  void verifyPayloadMatchesContext_acceptsSidecarInTheContextFork() {
+  void verifyPayloadMatchesContext_acceptsSidecarWithTheDigestOfItsSlot() {
     final DataColumnSidecar fuluSidecar = sidecarAtSlot(lastFuluSlot);
     final DataColumnSidecar gloasSidecar = sidecarAtSlot(firstGloasSlot);
 
@@ -80,8 +77,8 @@ class ForkDigestRpcContextCodecTest {
     assertThatThrownBy(
             () -> sidecarCodec.verifyPayloadMatchesContext(FULU_FORK_DIGEST, gloasSidecar))
         .isInstanceOf(ContextPayloadMismatchException.class)
-        .hasMessageContaining("FULU")
-        .hasMessageContaining("GLOAS");
+        .hasMessageContaining(FULU_FORK_DIGEST.toHexString())
+        .hasMessageContaining(GLOAS_FORK_DIGEST.toHexString());
   }
 
   @Test
@@ -94,12 +91,12 @@ class ForkDigestRpcContextCodecTest {
   }
 
   @Test
-  void verifyPayloadMatchesContext_rejectsUnknownContextForSidecar() {
-    final DataColumnSidecar gloasSidecar = sidecarAtSlot(firstGloasSlot);
+  void verifyPayloadMatchesContext_rejectsAnyDigestOtherThanTheSlotsOwn() {
+    final DataColumnSidecar fuluSidecar = sidecarAtSlot(lastFuluSlot);
 
     assertThatThrownBy(
-            () -> sidecarCodec.verifyPayloadMatchesContext(UNKNOWN_FORK_DIGEST, gloasSidecar))
-        .isInstanceOf(UnrecognizedContextBytesException.class);
+            () -> sidecarCodec.verifyPayloadMatchesContext(OTHER_FULU_DIGEST, fuluSidecar))
+        .isInstanceOf(ContextPayloadMismatchException.class);
   }
 
   @Test

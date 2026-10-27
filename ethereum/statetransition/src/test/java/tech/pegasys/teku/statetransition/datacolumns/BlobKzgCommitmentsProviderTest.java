@@ -20,6 +20,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static tech.pegasys.teku.infrastructure.async.SafeFutureAssert.assertThatSafeFuture;
 
 import java.util.Optional;
 import org.apache.tuweni.bytes.Bytes32;
@@ -112,9 +113,10 @@ class BlobKzgCommitmentsProviderTest {
     final SszList<SszKZGCommitment> commitments =
         dataColumnSidecar.getMaybeKzgCommitments().orElseThrow();
 
-    assertThat(fuluProvider.getBlobKzgCommitments(dataColumnSidecar).join()).contains(commitments);
-    assertThat(fuluProvider.getBlobKzgCommitments(dataColumnSidecar.getBeaconBlockRoot()).join())
-        .isEmpty();
+    assertThatSafeFuture(fuluProvider.getBlobKzgCommitments(dataColumnSidecar))
+        .isCompletedWithOptionalContaining(commitments);
+    assertThatSafeFuture(fuluProvider.getBlobKzgCommitments(dataColumnSidecar.getBeaconBlockRoot()))
+        .isCompletedWithEmptyOptional();
     verify(combinedChainDataClient).getBlockByBlockRoot(dataColumnSidecar.getBeaconBlockRoot());
   }
 
@@ -127,7 +129,8 @@ class BlobKzgCommitmentsProviderTest {
             fuluDataStructureUtil.randomSignedBeaconBlockHeader(UInt64.ONE), UInt64.ZERO);
     assertThat(sidecarWithOwnCommitments.getMaybeKzgCommitments()).isPresent();
 
-    assertThat(provider.getBlobKzgCommitments(sidecarWithOwnCommitments).join()).isEmpty();
+    assertThatSafeFuture(provider.getBlobKzgCommitments(sidecarWithOwnCommitments))
+        .isCompletedWithEmptyOptional();
     verify(combinedChainDataClient)
         .getBlockByBlockRoot(sidecarWithOwnCommitments.getBeaconBlockRoot());
   }
@@ -144,8 +147,8 @@ class BlobKzgCommitmentsProviderTest {
         fuluDataStructureUtil.randomDataColumnSidecar(block.asHeader(), UInt64.ZERO);
     provider.onNewBlock(block);
 
-    assertThat(provider.getBlobKzgCommitments(sidecarWithOwnCommitments).join())
-        .contains(bidCommitments);
+    assertThatSafeFuture(provider.getBlobKzgCommitments(sidecarWithOwnCommitments))
+        .isCompletedWithOptionalContaining(bidCommitments);
     assertThat(sidecarWithOwnCommitments.getMaybeKzgCommitments().orElseThrow().hashTreeRoot())
         .isNotEqualTo(bidCommitments.hashTreeRoot());
   }
