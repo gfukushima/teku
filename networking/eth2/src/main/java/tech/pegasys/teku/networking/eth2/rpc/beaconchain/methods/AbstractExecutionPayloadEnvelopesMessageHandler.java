@@ -15,10 +15,12 @@ package tech.pegasys.teku.networking.eth2.rpc.beaconchain.methods;
 
 import static tech.pegasys.teku.infrastructure.async.SafeFuture.completedFuture;
 import static tech.pegasys.teku.infrastructure.unsigned.UInt64.ZERO;
+import static tech.pegasys.teku.networking.eth2.rpc.core.RpcResponseStatus.SERVER_ERROR_CODE;
 
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiPredicate;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -35,7 +37,8 @@ import tech.pegasys.teku.networking.eth2.peers.Eth2Peer;
 import tech.pegasys.teku.networking.eth2.peers.RequestKey;
 import tech.pegasys.teku.networking.eth2.rpc.core.PeerRequiredLocalMessageHandler;
 import tech.pegasys.teku.networking.eth2.rpc.core.ResponseCallback;
-import tech.pegasys.teku.networking.eth2.rpc.core.RpcException.ResourceUnavailableException;
+import tech.pegasys.teku.networking.eth2.rpc.core.RpcException;
+import tech.pegasys.teku.networking.p2p.rpc.StreamClosedException;
 import tech.pegasys.teku.spec.Spec;
 import tech.pegasys.teku.spec.datastructures.epbs.versions.gloas.SignedExecutionPayloadEnvelope;
 import tech.pegasys.teku.storage.client.CombinedChainDataClient;
@@ -115,38 +118,71 @@ public abstract class AbstractExecutionPayloadEnvelopesMessageHandler<
       return;
     }
 
-    final TRequestState requestState = createRequestState(message, callback);
-
-    // Cap concurrent requests that may hit the EL. Rejected requests are not refunded.
-    final boolean needsUnblinding = requestState.needsUnblinding();
-    if (needsUnblinding && !requestLimiter.tryAcquire(peer.getId())) {
-      requestCounter.labels("concurrency_limited").inc();
-      callback.completeWithErrorResponse(
-          new ResourceUnavailableException(
-              "Too many execution payload envelope requests are being served"));
-      return;
+    // Cap concurrent requests that may hit the EL, before doing any work for them
+    final boolean requiresPermit = requiresPermit(message);
+    final SafeFuture<Void> admission;
+    if (requiresPermit) {
+      final Optional<SafeFuture<Void>> maybeAdmission = requestLimiter.acquire(peer.getId());
+      if (maybeAdmission.isEmpty()) {
+        requestCounter.labels("concurrency_limited").inc();
+        peer.adjustExecutionPayloadEnvelopesRequest(maybeRequestKey.get(), 0);
+        callback.completeWithErrorResponse(
+            new RpcException(
+                SERVER_ERROR_CODE,
+                "Too many execution payload envelope requests, please retry later"));
+        return;
+      }
+      admission = maybeAdmission.get();
+      if (!admission.isDone()) {
+        requestCounter.labels("queued").inc();
+      }
+    } else {
+      admission = SafeFuture.COMPLETE;
     }
     requestCounter.labels("ok").inc();
     totalExecutionPayloadEnvelopesRequestedCounter.inc(requestedCount);
 
-    SafeFuture<Void> response = serve(requestState);
-    if (needsUnblinding) {
+    final AtomicReference<TRequestState> requestState = new AtomicReference<>();
+    SafeFuture<Void> response =
+        admission.thenCompose(
+            __ -> {
+              if (callback.isClosed()) {
+                return SafeFuture.failedFuture(new StreamClosedException());
+              }
+              requestState.set(createRequestState(message, callback));
+              return serve(requestState.get());
+            });
+    if (requiresPermit) {
       response = response.alwaysRun(() -> requestLimiter.release(peer.getId()));
     }
 
     response.finish(
         () -> {
-          // Refund only the work never done, not envelopes never sent
-          if (requestState.getChargedCount() != requestedCount) {
-            peer.adjustExecutionPayloadEnvelopesRequest(
-                maybeRequestKey.get(), requestState.getChargedCount());
-          }
+          refundWorkNotDone(peer, maybeRequestKey.get(), requestedCount, requestState.get());
           callback.completeSuccessfully();
         },
-        err -> handleError(err, callback, requestType));
+        err -> {
+          refundWorkNotDone(peer, maybeRequestKey.get(), requestedCount, requestState.get());
+          handleError(err, callback, requestType);
+        });
+  }
+
+  /** Adjusts the peer's charge to the lookups done, not the envelopes sent. */
+  private void refundWorkNotDone(
+      final Eth2Peer peer,
+      final RequestKey requestKey,
+      final long requestedCount,
+      final TRequestState requestState) {
+    final long chargedCount = requestState == null ? 0 : requestState.getChargedCount();
+    if (chargedCount != requestedCount) {
+      peer.adjustExecutionPayloadEnvelopesRequest(requestKey, chargedCount);
+    }
   }
 
   protected abstract long getRequestedCount(TRequest message);
+
+  /** Cheap check, before any lookup, of whether serving the request may need the EL. */
+  protected abstract boolean requiresPermit(TRequest message);
 
   protected abstract TRequestState createRequestState(
       TRequest message, ResponseCallback<SignedExecutionPayloadEnvelope> callback);

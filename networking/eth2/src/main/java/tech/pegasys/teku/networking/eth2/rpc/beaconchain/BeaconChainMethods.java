@@ -15,6 +15,8 @@ package tech.pegasys.teku.networking.eth2.rpc.beaconchain;
 
 import static tech.pegasys.teku.spec.config.Constants.MAXIMUM_CONCURRENT_EXECUTION_PAYLOAD_ENVELOPE_REQUESTS;
 import static tech.pegasys.teku.spec.config.Constants.MAXIMUM_CONCURRENT_EXECUTION_PAYLOAD_ENVELOPE_REQUESTS_PER_PEER;
+import static tech.pegasys.teku.spec.config.Constants.MAXIMUM_PENDING_EXECUTION_PAYLOAD_ENVELOPE_REQUESTS_PER_PEER;
+import static tech.pegasys.teku.spec.config.Constants.MAXIMUM_QUEUED_EXECUTION_PAYLOAD_ENVELOPE_REQUESTS;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -220,7 +222,9 @@ public class BeaconChainMethods {
     final ExecutionPayloadEnvelopesRequestLimiter executionPayloadEnvelopesRequestLimiter =
         new ExecutionPayloadEnvelopesRequestLimiter(
             MAXIMUM_CONCURRENT_EXECUTION_PAYLOAD_ENVELOPE_REQUESTS,
-            MAXIMUM_CONCURRENT_EXECUTION_PAYLOAD_ENVELOPE_REQUESTS_PER_PEER);
+            MAXIMUM_CONCURRENT_EXECUTION_PAYLOAD_ENVELOPE_REQUESTS_PER_PEER,
+            MAXIMUM_QUEUED_EXECUTION_PAYLOAD_ENVELOPE_REQUESTS,
+            MAXIMUM_PENDING_EXECUTION_PAYLOAD_ENVELOPE_REQUESTS_PER_PEER);
     return new BeaconChainMethods(
         createStatus(spec, asyncRunner, statusMessageFactory, peerLookup, rpcEncoding),
         createGoodBye(asyncRunner, metricsSystem, peerLookup, rpcEncoding),

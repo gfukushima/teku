@@ -13,11 +13,10 @@
 
 package tech.pegasys.teku.networking.eth2.rpc.beaconchain.methods;
 
-import static tech.pegasys.teku.infrastructure.async.SafeFuture.completedFuture;
-
 import com.google.common.annotations.VisibleForTesting;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.function.Function;
 import org.apache.tuweni.bytes.Bytes32;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
@@ -77,6 +76,20 @@ public class ExecutionPayloadEnvelopesByRootMessageHandler
     return message.size();
   }
 
+  /** Envelopes held in memory need no EL call, so only other roots take a permit. */
+  @Override
+  protected boolean requiresPermit(final ExecutionPayloadEnvelopesByRootRequestMessage message) {
+    for (final SszBytes32 beaconBlockRoot : message) {
+      if (combinedChainDataClient
+          .getRecentChainData()
+          .getExecutionPayloadIfAvailable(beaconBlockRoot.get())
+          .isEmpty()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   @Override
   protected RequestState createRequestState(
       final ExecutionPayloadEnvelopesByRootRequestMessage message,
@@ -126,23 +139,20 @@ public class ExecutionPayloadEnvelopesByRootMessageHandler
    */
   private SafeFuture<List<Bytes32>> selectRetrievableBlockRoots(
       final List<Bytes32> blockRoots, final UInt64 minServableEpoch) {
-    SafeFuture<List<Bytes32>> retrievableBlockRoots = completedFuture(new ArrayList<>());
-    for (final Bytes32 blockRoot : blockRoots) {
-      retrievableBlockRoots =
-          retrievableBlockRoots.thenCompose(
-              retrievable ->
-                  combinedChainDataClient
-                      .getSlotByBlockRoot(blockRoot)
-                      .thenApply(
-                          maybeSlot -> {
-                            if (maybeSlot.isEmpty()
-                                || isWithinServableRange(maybeSlot.get(), minServableEpoch)) {
-                              retrievable.add(blockRoot);
-                            }
-                            return retrievable;
-                          }));
-    }
-    return retrievableBlockRoots;
+    return SafeFuture.collectAll(
+            blockRoots.stream()
+                .map(
+                    blockRoot ->
+                        combinedChainDataClient
+                            .getSlotByBlockRoot(blockRoot)
+                            .thenApply(
+                                maybeSlot ->
+                                    maybeSlot.isEmpty()
+                                            || isWithinServableRange(
+                                                maybeSlot.get(), minServableEpoch)
+                                        ? Optional.of(blockRoot)
+                                        : Optional.<Bytes32>empty())))
+        .thenApply(roots -> roots.stream().flatMap(Optional::stream).toList());
   }
 
   private boolean isWithinServableRange(final UInt64 slot, final UInt64 minServableEpoch) {
@@ -162,11 +172,6 @@ public class ExecutionPayloadEnvelopesByRootMessageHandler
       super(callback, blockRoots.size());
       this.blockRoots = blockRoots;
       this.minServableEpoch = minServableEpoch;
-    }
-
-    @Override
-    boolean needsUnblinding() {
-      return true;
     }
 
     UInt64 getMinServableEpoch() {

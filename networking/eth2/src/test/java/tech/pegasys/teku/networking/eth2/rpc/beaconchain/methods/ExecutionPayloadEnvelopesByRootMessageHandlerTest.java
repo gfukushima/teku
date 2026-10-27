@@ -27,6 +27,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static tech.pegasys.teku.infrastructure.unsigned.UInt64.ZERO;
+import static tech.pegasys.teku.networking.eth2.rpc.core.RpcResponseStatus.SERVER_ERROR_CODE;
 
 import com.google.common.base.Throwables;
 import java.util.ArrayList;
@@ -47,7 +48,6 @@ import tech.pegasys.teku.networking.eth2.peers.Eth2Peer;
 import tech.pegasys.teku.networking.eth2.peers.RequestKey;
 import tech.pegasys.teku.networking.eth2.rpc.beaconchain.BeaconChainMethodIds;
 import tech.pegasys.teku.networking.eth2.rpc.core.ResponseCallback;
-import tech.pegasys.teku.networking.eth2.rpc.core.RpcException;
 import tech.pegasys.teku.networking.eth2.rpc.core.encodings.RpcEncoding;
 import tech.pegasys.teku.networking.p2p.mock.MockNodeId;
 import tech.pegasys.teku.networking.p2p.peer.NodeId;
@@ -81,9 +81,9 @@ class ExecutionPayloadEnvelopesByRootMessageHandlerTest {
       mock(CombinedChainDataClient.class);
   private final StubMetricsSystem metricsSystem = new StubMetricsSystem();
   private static final NodeId PEER_ID = new MockNodeId(1);
-  // Two requests may be served at a time, one per peer
+  // 2 requests served at a time, 1 per peer, 1 waiting, 2 pending per peer
   private final ExecutionPayloadEnvelopesRequestLimiter requestLimiter =
-      new ExecutionPayloadEnvelopesRequestLimiter(2, 1);
+      new ExecutionPayloadEnvelopesRequestLimiter(2, 1, 1, 2);
 
   final ExecutionPayloadEnvelopesByRootMessageHandler handler =
       new ExecutionPayloadEnvelopesByRootMessageHandler(
@@ -233,8 +233,9 @@ class ExecutionPayloadEnvelopesByRootMessageHandlerTest {
   @Test
   public void onIncomingMessage_shouldStopRetrievingEnvelopesWhenStreamIsClosed() {
     final List<SignedExecutionPayloadEnvelope> envelopes = buildChain(4);
-    // The peer resets the stream after the first batch has been sent
-    when(callback.isClosed()).thenReturn(false, true);
+    // The peer resets the stream after the first batch has been sent: open at admission and
+    // before the first batch, closed before the second
+    when(callback.isClosed()).thenReturn(false, false, true);
 
     final ExecutionPayloadEnvelopesByRootRequestMessage message =
         createRequestFromExecutionPayloadEnvelopes(envelopes);
@@ -249,30 +250,30 @@ class ExecutionPayloadEnvelopesByRootMessageHandlerTest {
         .getSlotByBlockRoot(envelopes.get(2).getBeaconBlockRoot());
     verify(callback, never()).completeSuccessfully();
     verify(callback).completeWithUnexpectedError(argThat(this::isStreamClosedError));
-    // The peer abandoned the request so nothing is refunded
-    verify(peer, never()).adjustExecutionPayloadEnvelopesRequest(any(), anyLong());
+    // Charged only for the batch looked up before the stream closed
+    verify(peer).adjustExecutionPayloadEnvelopesRequest(any(), eq(2L));
   }
 
   @Test
   public void onIncomingMessage_shouldRejectRequestWhenTooManyAreBeingServed() {
     final List<SignedExecutionPayloadEnvelope> envelopes = buildChain(2);
-    // Other peers' requests already fill the limit
-    assertThat(requestLimiter.tryAcquire(new MockNodeId(2))).isTrue();
-    assertThat(requestLimiter.tryAcquire(new MockNodeId(3))).isTrue();
+    // Other peers' requests take every permit and every queue slot
+    acquireNow(new MockNodeId(2));
+    acquireNow(new MockNodeId(3));
+    assertThat(requestLimiter.acquire(new MockNodeId(4))).isPresent();
 
     final ExecutionPayloadEnvelopesByRootRequestMessage message =
         createRequestFromExecutionPayloadEnvelopes(envelopes);
     handler.onIncomingMessage(V2_PROTOCOL_ID, peer, message, callback);
 
     verify(callback)
-        .completeWithErrorResponse(any(RpcException.ResourceUnavailableException.class));
+        .completeWithErrorResponse(argThat(error -> error.getResponseCode() == SERVER_ERROR_CODE));
     verify(callback, never()).respond(any());
     verify(callback, never()).completeSuccessfully();
-    // No work is done for the rejected request
+    // No work is done for the rejected request, so it is fully refunded
     verify(combinedChainDataClient, never()).getSlotByBlockRoot(any());
     verify(combinedChainDataClient, never()).getExecutionPayloadsByBlockRoots(any());
-    // The rejected request still counts against the peer's rate limit
-    verify(peer, never()).adjustExecutionPayloadEnvelopesRequest(any(), anyLong());
+    verify(peer).adjustExecutionPayloadEnvelopesRequest(any(), eq(0L));
     assertThat(getRequestCounterValueForLabel("concurrency_limited")).isOne();
     assertThat(getRequestCounterValueForLabel("ok")).isZero();
   }
@@ -286,7 +287,7 @@ class ExecutionPayloadEnvelopesByRootMessageHandlerTest {
     handler.onIncomingMessage(V2_PROTOCOL_ID, peer, message, callback);
 
     verify(callback).completeSuccessfully();
-    assertThat(requestLimiter.tryAcquire(PEER_ID)).isTrue();
+    assertThat(isAdmittedNow(PEER_ID)).isTrue();
   }
 
   @Test
@@ -301,28 +302,72 @@ class ExecutionPayloadEnvelopesByRootMessageHandlerTest {
     handler.onIncomingMessage(V2_PROTOCOL_ID, peer, message, callback);
 
     verify(callback).completeWithUnexpectedError(any());
-    assertThat(requestLimiter.tryAcquire(PEER_ID)).isTrue();
+    assertThat(isAdmittedNow(PEER_ID)).isTrue();
   }
 
   @Test
-  public void onIncomingMessage_shouldRejectRequestWhenPeerAlreadyHasItsShareOfRequests() {
+  public void onIncomingMessage_shouldServeRootsHeldInMemoryWithoutAPermit() {
     final List<SignedExecutionPayloadEnvelope> envelopes = buildChain(2);
-    // The limit has room, but this peer already has a request being served
-    assertThat(requestLimiter.tryAcquire(PEER_ID)).isTrue();
+    envelopes.forEach(
+        envelope ->
+            when(recentChainData.getExecutionPayloadIfAvailable(envelope.getBeaconBlockRoot()))
+                .thenReturn(Optional.of(envelope)));
+    // Other peers' requests take every permit and every queue slot
+    acquireNow(new MockNodeId(2));
+    acquireNow(new MockNodeId(3));
+    assertThat(requestLimiter.acquire(new MockNodeId(4))).isPresent();
 
     final ExecutionPayloadEnvelopesByRootRequestMessage message =
         createRequestFromExecutionPayloadEnvelopes(envelopes);
     handler.onIncomingMessage(V2_PROTOCOL_ID, peer, message, callback);
 
-    verify(callback)
-        .completeWithErrorResponse(any(RpcException.ResourceUnavailableException.class));
-    verify(callback, never()).respond(any());
-    verify(callback, never()).completeSuccessfully();
+    envelopes.forEach(envelope -> verify(callback).respond(envelope));
+    verify(callback).completeSuccessfully();
+    assertThat(getRequestCounterValueForLabel("concurrency_limited")).isZero();
+  }
+
+  @Test
+  public void onIncomingMessage_shouldQueueRequestWhenPeerAlreadyHasItsShareOfRequests() {
+    final List<SignedExecutionPayloadEnvelope> envelopes = buildChain(2);
+    // The limit has room, but this peer already has a request being served
+    acquireNow(PEER_ID);
+
+    final ExecutionPayloadEnvelopesByRootRequestMessage message =
+        createRequestFromExecutionPayloadEnvelopes(envelopes);
+    handler.onIncomingMessage(V2_PROTOCOL_ID, peer, message, callback);
+
+    // Nothing is looked up while waiting
     verify(combinedChainDataClient, never()).getSlotByBlockRoot(any());
-    verify(peer, never()).adjustExecutionPayloadEnvelopesRequest(any(), anyLong());
-    assertThat(getRequestCounterValueForLabel("concurrency_limited")).isOne();
-    // Another peer is still admitted
-    assertThat(requestLimiter.tryAcquire(new MockNodeId(2))).isTrue();
+    verify(callback, never()).respond(any());
+    verify(callback, never()).completeWithErrorResponse(any());
+    assertThat(getRequestCounterValueForLabel("queued")).isOne();
+
+    requestLimiter.release(PEER_ID);
+
+    envelopes.forEach(envelope -> verify(callback).respond(envelope));
+    verify(callback).completeSuccessfully();
+  }
+
+  @Test
+  public void onIncomingMessage_shouldResolveTheSlotsOfABatchInParallel() {
+    final List<SignedExecutionPayloadEnvelope> envelopes = buildChain(4);
+    final List<SafeFuture<Optional<UInt64>>> pendingLookups = new ArrayList<>();
+    doAnswer(
+            i -> {
+              final SafeFuture<Optional<UInt64>> lookup = new SafeFuture<>();
+              pendingLookups.add(lookup);
+              return lookup;
+            })
+        .when(combinedChainDataClient)
+        .getSlotByBlockRoot(any());
+
+    final ExecutionPayloadEnvelopesByRootRequestMessage message =
+        createRequestFromExecutionPayloadEnvelopes(envelopes);
+    handler.onIncomingMessage(V2_PROTOCOL_ID, peer, message, callback);
+
+    // Both lookups of the first batch are issued before either completes
+    assertThat(pendingLookups).hasSize(2);
+    verify(combinedChainDataClient, never()).getExecutionPayloadsByBlockRoots(any());
   }
 
   @Test
@@ -542,6 +587,14 @@ class ExecutionPayloadEnvelopesByRootMessageHandlerTest {
             })
         .when(combinedChainDataClient)
         .getExecutionPayloadsByBlockRoots(any());
+  }
+
+  private void acquireNow(final NodeId peerId) {
+    assertThat(isAdmittedNow(peerId)).isTrue();
+  }
+
+  private boolean isAdmittedNow(final NodeId peerId) {
+    return requestLimiter.acquire(peerId).map(SafeFuture::isDone).orElse(false);
   }
 
   private boolean isStreamClosedError(final Throwable error) {

@@ -31,9 +31,6 @@ abstract class ExecutionPayloadEnvelopesRequestState {
     this.requestedCount = requestedCount;
   }
 
-  /** Whether serving the request may need envelopes unblinded via the EL. */
-  abstract boolean needsUnblinding();
-
   boolean isStreamClosed() {
     return callback.isClosed();
   }

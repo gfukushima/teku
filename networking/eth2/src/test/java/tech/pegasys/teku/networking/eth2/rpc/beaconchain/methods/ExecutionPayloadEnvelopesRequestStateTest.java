@@ -40,12 +40,7 @@ class ExecutionPayloadEnvelopesRequestStateTest {
       mock(ResponseCallback.class);
 
   private final ExecutionPayloadEnvelopesRequestState requestState =
-      new ExecutionPayloadEnvelopesRequestState(callback, 5) {
-        @Override
-        boolean needsUnblinding() {
-          return true;
-        }
-      };
+      new ExecutionPayloadEnvelopesRequestState(callback, 5) {};
 
   @Test
   void shouldAccumulateCharges() {

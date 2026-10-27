@@ -113,6 +113,23 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandler
   }
 
   @Override
+  protected boolean requiresPermit(final ExecutionPayloadEnvelopesByRangeRequestMessage message) {
+    final UInt64 adjustedStartSlot = trimToServableStartSlot(message.getStartSlot());
+    if (message.getCount().isZero() || adjustedStartSlot.isGreaterThan(message.getMaxSlot())) {
+      return false;
+    }
+    // Nothing to walk beyond our head
+    return combinedChainDataClient
+        .getChainHead()
+        .map(head -> adjustedStartSlot.isLessThanOrEqualTo(head.getSlot()))
+        .orElse(true);
+  }
+
+  private UInt64 trimToServableStartSlot(final UInt64 startSlot) {
+    return startSlot.max(spec.computeStartSlotAtEpoch(getMinServableEpoch()));
+  }
+
+  @Override
   protected RequestState createRequestState(
       final ExecutionPayloadEnvelopesByRangeRequestMessage message,
       final ResponseCallback<SignedExecutionPayloadEnvelope> callback) {
@@ -124,8 +141,7 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandler
     // it with an execution layer round trip, so slots outside the servable range are dropped before
     // any of that work is done. The count is reduced along with the start slot so that we never
     // respond with envelopes from outside the range the peer asked for.
-    final UInt64 minServableSlot = spec.computeStartSlotAtEpoch(getMinServableEpoch());
-    final UInt64 adjustedStartSlot = startSlot.max(minServableSlot);
+    final UInt64 adjustedStartSlot = trimToServableStartSlot(startSlot);
     final UInt64 adjustedCount = count.minusMinZero(adjustedStartSlot.minusMinZero(startSlot));
 
     // Envelopes are only served for payloads that are part of the chain defined by the current
@@ -181,22 +197,19 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandler
         .thenCompose(__ -> sendNextBatch(requestState));
   }
 
+  /** Resolves the slots in parallel, keeping slot order and skipping slots with no root. */
   private SafeFuture<List<SlotAndBlockRoot>> resolveBlockRoots(
       final List<UInt64> slots, final RequestState requestState) {
-    SafeFuture<List<SlotAndBlockRoot>> blockRoots = completedFuture(new ArrayList<>());
-    for (final UInt64 slot : slots) {
-      blockRoots =
-          blockRoots.thenCompose(
-              resolved ->
-                  resolveBlockRoot(slot, requestState)
-                      .thenApply(
-                          maybeBlockRoot -> {
-                            maybeBlockRoot.ifPresent(
-                                blockRoot -> resolved.add(new SlotAndBlockRoot(slot, blockRoot)));
-                            return resolved;
-                          }));
-    }
-    return blockRoots;
+    return SafeFuture.collectAll(
+            slots.stream()
+                .map(
+                    slot ->
+                        resolveBlockRoot(slot, requestState)
+                            .thenApply(
+                                maybeBlockRoot ->
+                                    maybeBlockRoot.map(
+                                        blockRoot -> new SlotAndBlockRoot(slot, blockRoot)))))
+        .thenApply(blocks -> blocks.stream().flatMap(Optional::stream).toList());
   }
 
   private SafeFuture<Optional<Bytes32>> resolveBlockRoot(
@@ -233,12 +246,6 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandler
       this.remainingSlots = count;
       this.headSlot = headSlot;
       this.knownNodes = knownNodes;
-    }
-
-    /** Hot envelopes evicted from memory are stored blinded too, so any slot may need the EL. */
-    @Override
-    boolean needsUnblinding() {
-      return hasMoreSlotsToWalk();
     }
 
     Optional<ForkChoiceNode> getKnownNode(final UInt64 slot) {

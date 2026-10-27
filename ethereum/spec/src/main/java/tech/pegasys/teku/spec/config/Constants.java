@@ -66,6 +66,9 @@ public class Constants {
   // Concurrent execution payload envelope requests served, in total and per peer
   public static final int MAXIMUM_CONCURRENT_EXECUTION_PAYLOAD_ENVELOPE_REQUESTS = 16;
   public static final int MAXIMUM_CONCURRENT_EXECUTION_PAYLOAD_ENVELOPE_REQUESTS_PER_PEER = 2;
+  // Requests over those limits wait; a peer may have 8 served or waiting, covering sync's 5 batches
+  public static final int MAXIMUM_QUEUED_EXECUTION_PAYLOAD_ENVELOPE_REQUESTS = 64;
+  public static final int MAXIMUM_PENDING_EXECUTION_PAYLOAD_ENVELOPE_REQUESTS_PER_PEER = 8;
   public static final int REPUTATION_MANAGER_CAPACITY = 1024;
   public static final Duration STORAGE_REQUEST_TIMEOUT = Duration.ofSeconds(60);
   public static final int STORAGE_QUERY_CHANNEL_PARALLELISM = 20; // # threads
