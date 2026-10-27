@@ -13,7 +13,6 @@
 
 package tech.pegasys.teku.networking.eth2.rpc.core;
 
-import com.google.common.annotations.VisibleForTesting;
 import io.netty.buffer.ByteBuf;
 import java.time.Duration;
 import java.util.Optional;
@@ -140,8 +139,8 @@ public class Eth2IncomingRequestHandler<
         .finishStackTrace();
   }
 
-  @VisibleForTesting
-  boolean hasRequestBeenReceived() {
+  @Override
+  public boolean hasRequestBeenReceived() {
     return requestHandled.get();
   }
 
