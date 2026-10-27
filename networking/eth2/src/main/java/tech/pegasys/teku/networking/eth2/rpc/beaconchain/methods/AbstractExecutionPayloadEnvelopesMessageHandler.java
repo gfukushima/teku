@@ -135,6 +135,15 @@ public abstract class AbstractExecutionPayloadEnvelopesMessageHandler<
       admission = maybeAdmission.get();
       if (!admission.isDone()) {
         requestCounter.labels("queued").inc();
+        // Leave the queue as soon as the peer gives up rather than when finally admitted
+        callback
+            .getStreamClosedFuture()
+            .always(
+                () -> {
+                  if (requestLimiter.cancel(peer.getId(), admission)) {
+                    admission.completeExceptionally(new StreamClosedException());
+                  }
+                });
       }
     } else {
       admission = SafeFuture.COMPLETE;
@@ -153,7 +162,14 @@ public abstract class AbstractExecutionPayloadEnvelopesMessageHandler<
               return serve(requestState.get());
             });
     if (requiresPermit) {
-      response = response.alwaysRun(() -> requestLimiter.release(peer.getId()));
+      // Only an admitted request holds a permit
+      response =
+          response.alwaysRun(
+              () -> {
+                if (admission.isDone() && !admission.isCompletedExceptionally()) {
+                  requestLimiter.release(peer.getId());
+                }
+              });
     }
 
     response.finish(

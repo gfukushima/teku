@@ -168,10 +168,12 @@ public class Eth2IncomingRequestHandlerTest
 
     assertThat(capturedCallback.get()).isNotNull();
     assertThat(capturedCallback.get().isClosed()).isFalse();
+    assertThat(capturedCallback.get().getStreamClosedFuture()).isNotDone();
 
     requestHandler.closed(nodeId, rpcStream);
 
     assertThat(capturedCallback.get().isClosed()).isTrue();
+    assertThat(capturedCallback.get().getStreamClosedFuture()).isCompleted();
   }
 
   @Test

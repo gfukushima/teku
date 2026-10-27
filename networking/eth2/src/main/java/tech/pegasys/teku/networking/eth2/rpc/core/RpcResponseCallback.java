@@ -18,7 +18,6 @@ import com.google.common.base.Throwables;
 import io.netty.channel.socket.ChannelOutputShutdownException;
 import java.nio.channels.ClosedChannelException;
 import java.time.Duration;
-import java.util.function.BooleanSupplier;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.tuweni.bytes.Bytes;
@@ -41,14 +40,14 @@ class RpcResponseCallback<TResponse extends SszData> implements ResponseCallback
   private final RpcStream rpcStream;
   private final AsyncRunner asyncRunner;
   private final String protocolId;
-  private final BooleanSupplier streamClosed;
+  private final SafeFuture<Void> streamClosed;
 
   public RpcResponseCallback(
       final RpcStream rpcStream,
       final RpcResponseEncoder<TResponse, ?> responseEncoder,
       final AsyncRunner asyncRunner,
       final String protocolId,
-      final BooleanSupplier streamClosed) {
+      final SafeFuture<Void> streamClosed) {
     this.rpcStream = rpcStream;
     this.responseEncoder = responseEncoder;
     this.asyncRunner = asyncRunner;
@@ -58,7 +57,12 @@ class RpcResponseCallback<TResponse extends SszData> implements ResponseCallback
 
   @Override
   public boolean isClosed() {
-    return streamClosed.getAsBoolean();
+    return streamClosed.isDone();
+  }
+
+  @Override
+  public SafeFuture<Void> getStreamClosedFuture() {
+    return streamClosed;
   }
 
   @Override

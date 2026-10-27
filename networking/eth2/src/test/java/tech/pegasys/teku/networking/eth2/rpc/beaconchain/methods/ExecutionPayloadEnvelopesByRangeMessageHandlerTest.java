@@ -108,6 +108,8 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandlerTest {
   @SuppressWarnings("unchecked")
   final ResponseCallback<SignedExecutionPayloadEnvelope> callback = mock(ResponseCallback.class);
 
+  private final SafeFuture<Void> streamClosed = new SafeFuture<>();
+
   private final ChainBuilder chainBuilder = ChainBuilder.create(spec);
 
   @BeforeEach
@@ -131,6 +133,7 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandlerTest {
             i -> SafeFuture.completedFuture(getExecutionPayloadsByBlockRoots(i.getArgument(0))));
 
     when(callback.respond(any())).thenReturn(SafeFuture.COMPLETE);
+    when(callback.getStreamClosedFuture()).thenReturn(streamClosed);
   }
 
   @Test
@@ -541,6 +544,29 @@ public class ExecutionPayloadEnvelopesByRangeMessageHandlerTest {
     verify(callback, times(5)).respond(any());
     envelopes.forEach(envelope -> verify(callback).respond(envelope));
     verify(callback).completeSuccessfully();
+  }
+
+  @Test
+  public void onIncomingMessage_shouldCancelQueuedRequestAsSoonAsItsStreamCloses() {
+    buildChain(5);
+    acquireNow(new MockNodeId(2));
+    acquireNow(new MockNodeId(3));
+
+    final ExecutionPayloadEnvelopesByRangeRequestMessage message =
+        new ExecutionPayloadEnvelopesByRangeRequestMessage(UInt64.ONE, UInt64.valueOf(5));
+    handler.onIncomingMessage(PROTOCOL_ID, peer, message, callback);
+
+    // The peer gives up while the request is queued, before any permit is released
+    streamClosed.complete(null);
+
+    verify(callback).completeWithUnexpectedError(argThat(this::isStreamClosedError));
+    verify(peer).adjustExecutionPayloadEnvelopesRequest(any(), eq(0L));
+    verify(combinedChainDataClient, never()).getAncestorNodes(any(), any());
+    // It left the queue, so the slot is free for a new request
+    assertThat(requestLimiter.acquire(new MockNodeId(4))).isPresent();
+    // And it does not take the next permit
+    requestLimiter.release(new MockNodeId(2));
+    verify(callback, never()).respond(any());
   }
 
   @Test

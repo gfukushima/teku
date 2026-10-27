@@ -56,4 +56,9 @@ public record LoggingResponseCallback<T>(
   public boolean isClosed() {
     return callback.isClosed();
   }
+
+  @Override
+  public SafeFuture<Void> getStreamClosedFuture() {
+    return callback.getStreamClosedFuture();
+  }
 }

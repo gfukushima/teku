@@ -28,4 +28,7 @@ public interface ResponseCallback<T> {
 
   /** Whether the response stream has been closed, so handlers can stop doing work. */
   boolean isClosed();
+
+  /** Completes when the response stream closes. */
+  SafeFuture<Void> getStreamClosedFuture();
 }

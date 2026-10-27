@@ -105,6 +105,57 @@ class ExecutionPayloadEnvelopesRequestLimiterTest {
   }
 
   @Test
+  void shouldRemoveCancelledRequestFromTheQueue() {
+    acquireNow(peerA);
+    acquireNow(peerB);
+    final SafeFuture<Void> queued = limiter.acquire(peerC).orElseThrow();
+
+    assertThat(limiter.cancel(peerC, queued)).isTrue();
+    // Its queue slot is free again
+    assertThat(limiter.acquire(peerD)).isPresent();
+  }
+
+  @Test
+  void shouldFreeThePeersPendingAllowanceWhenItsQueuedRequestIsCancelled() {
+    final ExecutionPayloadEnvelopesRequestLimiter limiter =
+        new ExecutionPayloadEnvelopesRequestLimiter(2, 1, 10, 2);
+    acquireNow(limiter, peerA);
+    final SafeFuture<Void> queued = limiter.acquire(peerA).orElseThrow();
+    assertThat(limiter.acquire(peerA)).isEmpty();
+
+    limiter.cancel(peerA, queued);
+
+    assertThat(limiter.acquire(peerA)).isPresent();
+  }
+
+  @Test
+  void shouldNotAdmitCancelledRequestOnRelease() {
+    acquireNow(peerA);
+    acquireNow(peerB);
+    final SafeFuture<Void> queued = limiter.acquire(peerC).orElseThrow();
+    limiter.cancel(peerC, queued);
+
+    limiter.release(peerA);
+
+    // The freed permit is still available
+    acquireNow(peerD);
+  }
+
+  @Test
+  void shouldNotCancelRequestAlreadyAdmitted() {
+    acquireNow(peerA);
+    acquireNow(peerB);
+    final SafeFuture<Void> queued = limiter.acquire(peerC).orElseThrow();
+    limiter.release(peerA);
+
+    assertThat(limiter.cancel(peerC, queued)).isFalse();
+
+    assertThat(queued).isCompleted();
+    // Still counted as served until it is released
+    assertThat(limiter.acquire(peerD).orElseThrow()).isNotDone();
+  }
+
+  @Test
   void shouldIgnoreReleaseWithoutMatchingAcquisition() {
     limiter.release(peerA);
 

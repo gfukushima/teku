@@ -94,6 +94,8 @@ class ExecutionPayloadEnvelopesByRootMessageHandlerTest {
   @SuppressWarnings("unchecked")
   final ResponseCallback<SignedExecutionPayloadEnvelope> callback = mock(ResponseCallback.class);
 
+  private final SafeFuture<Void> streamClosed = new SafeFuture<>();
+
   @BeforeEach
   public void setup() {
     chainBuilder.generateGenesis();
@@ -110,6 +112,7 @@ class ExecutionPayloadEnvelopesByRootMessageHandlerTest {
         .thenAnswer(
             i -> SafeFuture.completedFuture(getExecutionPayloadsByBlockRoots(i.getArgument(0))));
     when(callback.respond(any())).thenReturn(SafeFuture.COMPLETE);
+    when(callback.getStreamClosedFuture()).thenReturn(streamClosed);
   }
 
   @Test
@@ -346,6 +349,25 @@ class ExecutionPayloadEnvelopesByRootMessageHandlerTest {
 
     envelopes.forEach(envelope -> verify(callback).respond(envelope));
     verify(callback).completeSuccessfully();
+  }
+
+  @Test
+  public void onIncomingMessage_shouldCancelQueuedRequestAsSoonAsItsStreamCloses() {
+    final List<SignedExecutionPayloadEnvelope> envelopes = buildChain(2);
+    // This peer already has its share of requests being served
+    acquireNow(PEER_ID);
+
+    final ExecutionPayloadEnvelopesByRootRequestMessage message =
+        createRequestFromExecutionPayloadEnvelopes(envelopes);
+    handler.onIncomingMessage(V2_PROTOCOL_ID, peer, message, callback);
+
+    streamClosed.complete(null);
+
+    verify(callback).completeWithUnexpectedError(argThat(this::isStreamClosedError));
+    verify(peer).adjustExecutionPayloadEnvelopesRequest(any(), eq(0L));
+    verify(combinedChainDataClient, never()).getSlotByBlockRoot(any());
+    // The peer's pending allowance is back: it can queue another request
+    assertThat(requestLimiter.acquire(PEER_ID)).isPresent();
   }
 
   @Test

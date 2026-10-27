@@ -78,6 +78,18 @@ public class ExecutionPayloadEnvelopesRequestLimiter {
     return Optional.of(waiter.admission());
   }
 
+  /**
+   * Removes a request that is still waiting, freeing its place. Returns false if it was already
+   * admitted, in which case it must be released as usual.
+   */
+  public synchronized boolean cancel(final NodeId peerId, final SafeFuture<Void> admission) {
+    final boolean removed = queue.removeIf(waiter -> waiter.admission().equals(admission));
+    if (removed) {
+      decrement(pendingRequestsByPeer, peerId);
+    }
+    return removed;
+  }
+
   public void release(final NodeId peerId) {
     final List<Waiter> admitted = new ArrayList<>();
     synchronized (this) {
